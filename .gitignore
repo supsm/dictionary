@@ -1,0 +1,7 @@
+.st*
+.vs/
+build/
+CMakeSettings.json
+
+api_key.txt
+*.zip

@@ -1,0 +1,43 @@
+# data file for the Fltk User Interface Designer (fluid)
+version 1.0306
+header_name {.h}
+code_name {.cxx}
+class FLTK_UI {open
+} {
+  Function {FLTK_UI()} {open
+  } {
+    Fl_Window window {
+      label Dictionary open
+      xywh {427 331 480 320} type Double hide
+    } {
+      Fl_Input search_bar {
+        callback search_word
+        xywh {80 10 310 25} labeltype NO_LABEL when 8
+      }
+      Fl_Button search_button {
+        label Search
+        callback search_word2
+        comment {separate callback function is used to prevent ambiguity in Fl_Callback cast}
+        xywh {395 10 70 25}
+      }
+      Fl_Button button_back {
+        label {←}
+        callback nav_back
+        xywh {15 10 25 25}
+      }
+      Fl_Button button_forward {
+        label {→}
+        callback nav_forward
+        xywh {45 10 25 25}
+      }
+      Fl_Text_Display text_display {selected
+        xywh {15 45 450 260} labeltype NO_LABEL
+        code0 {Fl_Text_Buffer* buf = new Fl_Text_Buffer();}
+        code1 {text_display->buffer(buf);}
+      }
+      Fl_Group hyperlinks {
+        xywh {15 45 450 260} labeltype NO_LABEL
+      } {}
+    }
+  }
+}
