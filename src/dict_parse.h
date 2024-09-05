@@ -36,8 +36,7 @@ task<void> parse_meta(json_coro_cursor& cursor, word_info& data)
         { "offensive", json_type::bool_value, [&cursor, &data]() -> task<void> { data.offensive = cursor.current().get<bool>(); CO_CALL(cursor.next_); } }
     } };
 	
-	bool val = true;
-	while (val) { CO_CALL(recursive_skip_until_obj, cursor, meta_callbacks) >> val; }
+	CO_WHILE(recursive_skip_until_obj, cursor, meta_callbacks) /* { */ }
 }
 
 task<void> parse_sdsense(json_coro_cursor& cursor, word_info& data)
@@ -74,8 +73,7 @@ task<void> parse_sdsense(json_coro_cursor& cursor, word_info& data)
 			} },
 	} };
 	
-	bool val = true;
-	while (val) { CO_CALL(recursive_skip_until_obj, cursor, sense_callbacks) >> val; }
+	CO_WHILE(recursive_skip_until_obj, cursor, sense_callbacks) /* { */ }
 }
 
 // parse a `sense` or `sen` object
@@ -123,13 +121,11 @@ task<void> parse_sense(json_coro_cursor& cursor, word_info& data)
 		std::move(basic_sense_callbacks.begin(), basic_sense_callbacks.end(),
 			sense_callbacks.begin() + sense_only_callbacks_size);
 		
-		bool val = true;
-		while (val) { CO_CALL(recursive_skip_until_obj, cursor, sense_callbacks) >> val; }
+		CO_WHILE(recursive_skip_until_obj, cursor, sense_callbacks) /* { */ }
 	}
 	else
 	{
-		bool val = true;
-		while (val) { CO_CALL(recursive_skip_until_obj, cursor, basic_sense_callbacks) >> val; }
+		CO_WHILE(recursive_skip_until_obj, cursor, basic_sense_callbacks) /* { */ }
 	}
 }
 
@@ -158,9 +154,7 @@ task<void> parse_pseq(json_coro_cursor& cursor, word_info& data)
 		{ "bs", CO_BIND_VOID(parse_bs, cursor, data) }
 	} };
 	
-	bool val = true;
-	while (val)
-		{ CO_CALL(recursive_skip_until_key_arr, cursor, pseq_callbacks) >> val; }
+	CO_WHILE(recursive_skip_until_key_arr, cursor, pseq_callbacks) /* { */ }
 	
 	CO_CALL(recursive_skip, cursor); // TODO: why is this necessary? shouldn't it already be consumed?
 }
@@ -189,9 +183,7 @@ task<void> parse_sseq_element(json_coro_cursor& cursor, word_info& data)
 		{ "bs", CO_BIND_VOID(parse_bs, cursor, data) }
 	} };
 	
-	bool val = true;
-	while (val)
-		{ CO_CALL(recursive_skip_until_key_arr, cursor, sseq_callbacks) >> val; }
+	CO_WHILE(recursive_skip_until_key_arr, cursor, sseq_callbacks) /* { */ }
 }
 
 // parse a `sseq` array from a def object
@@ -203,12 +195,8 @@ task<void> parse_sseq(json_coro_cursor& cursor, word_info& data)
 	
 	// parse array
 	using json_type = jsoncons::staj_event_type;
-	bool val = true;
-	while (val)
-	{
-		CO_CALL(recursive_skip_until_arr, cursor, json_type::begin_array) >> val;
-		if (!val)
-			{ break; }
+	CO_WHILE(recursive_skip_until_arr, cursor, json_type::begin_array)
+	// {
 		CO_CALL(parse_sseq_element, cursor, data);
 	}
 }
@@ -226,9 +214,7 @@ task<void> parse_single_def(json_coro_cursor& cursor, word_info& data)
 		{ "sseq", json_type::begin_array, CO_BIND_VOID(parse_sseq, cursor, data) }
 	} };
 	
-	bool val = true;
-	while (val)
-		{ CO_CALL(recursive_skip_until_obj, cursor, def_callbacks) >> val; }
+	CO_WHILE(recursive_skip_until_obj, cursor, def_callbacks) /* { */ }
 }
 
 // parse the `def` field
@@ -245,9 +231,7 @@ task<void> parse_def(json_coro_cursor& cursor, word_info& data)
 		{ json_type::begin_object, CO_BIND_VOID(parse_single_def, cursor, data) }
 	} };
 	
-	bool val = true;
-	while (val)
-		{ CO_CALL(recursive_skip_until_arr, cursor, def_callbacks) >> val; }
+	CO_WHILE(recursive_skip_until_arr, cursor, def_callbacks) /* { */ }
 }
 
 task<void> begin_parse(json_coro_cursor& cursor, std::vector<word_info>& data)
@@ -272,13 +256,8 @@ task<void> begin_parse(json_coro_cursor& cursor, std::vector<word_info>& data)
 		throw std::runtime_error("Expected word definition object");
 	}
 	
-	while (true)
-	{
-		bool val;
-		CO_CALL(recursive_skip_until_arr, cursor, json_type::begin_object) >> val;
-		if (!val)
-			{ break; }
-		
+	CO_WHILE(recursive_skip_until_arr, cursor, json_type::begin_object)
+	// {
 		data.emplace_back();
 		CO_CALL(cursor.next_); // consume begin object
 
@@ -288,9 +267,7 @@ task<void> begin_parse(json_coro_cursor& cursor, std::vector<word_info>& data)
 			{ "def", json_type::begin_array, CO_BIND_VOID(parse_def, cursor, data.back()) }
 		} };
 		
-		bool val2 = true;
-		while (val2)
-			{ CO_CALL(recursive_skip_until_obj, cursor, root_callbacks) >> val2; }
+		CO_WHILE(recursive_skip_until_obj, cursor, root_callbacks) /* { */ }
 	}
 }
 

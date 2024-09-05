@@ -240,9 +240,10 @@ task<bool> recursive_skip_until_arr(json_coro_cursor& cursor, const json_arr_cal
 	co_return val;
 }
 
-// skip elements in an array (main) until a condition is met, or until entire json array is consumed
+// skip elements in an array (main) until a condition is met regarding the first value of a sub-array iff it is a string ("key"),
+// or until entire main array is consumed
 // does not verify json and assumes all arrays/objects are started and ended correctly
-// expects cursor to be before an element in main array
+// expects cursor to be before an element in main array (i.e. after begin_array of main array)
 // leaves cursor directly AFTER string "key" in sub-array if `consume_after_cond`,
 // BEFORE string "key" if not `consume_after_cond`,
 // or AFTER end of main array if entire array is consumed
@@ -252,16 +253,13 @@ template<bool consume_after_cond = true>
 task<bool> recursive_skip_until_key_arr(json_coro_cursor& cursor, JsonKeyArrayCondition auto condition)
 {
 	using json_type = jsoncons::staj_event_type;
-	bool val = true;
-	while (val)
-	{
-		CO_CALL(recursive_skip_until_arr, cursor, json_type::begin_array) >> val;
-		if (!val)
-			{ break; }
+	CO_WHILE(recursive_skip_until_arr, cursor, json_type::begin_array)
+	// {
 		CO_CALL(cursor.next_); // consume begin array
 		const auto& cur_event = cursor.current();
 		if (cur_event.event_type() == json_type::string_value)
 		{
+			bool val;
 			CO_CALL(condition, cur_event.get<std::string_view>()) >> val;
 			if (val)
 			{

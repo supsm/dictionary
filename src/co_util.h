@@ -106,11 +106,30 @@ public:
 // call `func` with params
 // return type can be accessed with rha_wrapper::operator>>
 #define CO_CALL(func, ...) \
-decltype(func(__VA_ARGS__).coro_handle.promise().data_out) CONCAT(t_ret_, __LINE__); \
+decltype(func(__VA_ARGS__).coro_handle.promise().data_out) CONCAT(detail_t_ret_, __LINE__); \
 { auto t = func(__VA_ARGS__); \
 while (!t.coro_handle.done()) { co_await t; } \
-CONCAT(t_ret_, __LINE__) = t.coro_handle.promise().data_out; } \
-rha_wrapper(std::move(CONCAT(t_ret_, __LINE__)))
+CONCAT(detail_t_ret_, __LINE__) = t.coro_handle.promise().data_out; } \
+rha_wrapper(std::move(CONCAT(detail_t_ret_, __LINE__)))
+
+// use return value of `func` as the condition of a while loop
+// OPEN BRACE IS APPLIED IN MACRO AND NEEDS TO BE CLOSED
+// Example usage:
+// ```
+// CO_WHILE(foo, arg1, arg2, arg3)
+//     loop_body
+// }
+// ```
+// note: it's possible to make this accept a tuple-like structure for args
+//       and have the loop body as another macro arg (such that the closing
+//       paren of the macro denotes loop end), but that makes debugging a pain
+#define CO_WHILE(func, ...) \
+while (true) { \
+decltype(func(__VA_ARGS__).coro_handle.promise().data_out) CONCAT(detail_t_ret_, __LINE__); \
+{ auto t = func(__VA_ARGS__); \
+while (!t.coro_handle.done()) { co_await t; } \
+CONCAT(detail_t_ret_, __LINE__) = t.coro_handle.promise().data_out; } \
+if (!CONCAT(detail_t_ret_, __LINE__)) { break; }
 
 #define CO_BIND_VOID(func, ...) \
 [&]() -> task<void> { CO_CALL(func, __VA_ARGS__); }

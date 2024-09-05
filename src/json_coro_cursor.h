@@ -90,7 +90,9 @@ public:
 		}
 
 private:
+		// use next_ instead
 		void next() override {}
+		// use next_ instead
 		void next(std::error_code&) override {}
 
 public:
