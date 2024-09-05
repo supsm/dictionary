@@ -35,7 +35,6 @@ struct task
 	}
 };
 
-// TODO: something here still seems wrong
 template<typename Derived, typename T>
 struct basic_promise_type
 {

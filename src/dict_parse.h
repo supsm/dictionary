@@ -1,6 +1,7 @@
 #ifndef DICT_PARSE_H
 #define DICT_PARSE_H
 
+#include <stdexcept>
 #include <vector>
 
 #include "co_util.h"
@@ -257,16 +258,23 @@ task<void> begin_parse(json_coro_cursor& cursor, std::vector<word_info>& data)
 		
 	// TODO: detect "invalid key" condition
 	if (cursor.current().event_type() != json_type::begin_array)
-	{
-		// TODO: invalid json
-	}
+		{ throw std::runtime_error("Definition does not begin with an array"); }
 	CO_CALL(cursor.next_); // consume begin array
 	
-	// TODO: detect "no word found" condition
-	
-	bool val = true;
-	while (val)
+	switch (cursor.current().event_type())
 	{
+	case json_type::begin_object:
+		break;
+	case json_type::string_value:
+		// TODO: "no word found" condition
+		throw std::runtime_error("No word found. Possible alternatives: ");
+	default:
+		throw std::runtime_error("Expected word definition object");
+	}
+	
+	while (true)
+	{
+		bool val;
 		CO_CALL(recursive_skip_until_arr, cursor, json_type::begin_object) >> val;
 		if (!val)
 			{ break; }

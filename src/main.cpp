@@ -190,7 +190,22 @@ void search_word(std::string_view word)
 		// TODO: local lookup
 		try
 		{
-			auto res = http_client.Get("/api/v3/references/collegiate/json/" + std::string(word_only) + "?key=" + api_key,
+			static constexpr auto url_encode = [](std::string_view in)
+			{
+				std::string s;
+				for (char c : in)
+				{
+					if (('A' <= c && c <= 'Z') ||
+						('a' <= c && c <= 'z') ||
+						('0' <= c && c <= '9') ||
+						c == '-' || c == '.' || c == '_' || c == '~')
+						{ s += c; }
+					else
+						{ s += std::format("{:X}", c); }
+				}
+				return s;
+			};
+			auto res = http_client.Get(httplib::append_query_params("/api/v3/references/collegiate/json/" + url_encode(word_only), { { "key", api_key } }),
 				[&parse_task](const char* cur_data, std::size_t data_len)
 				{
 					try
@@ -200,17 +215,19 @@ void search_word(std::string_view word)
 						// TODO: replace with std::format once range formatter is more mature
 						throw std::runtime_error(fmt::format("JSON parse error: {}\nOccured in section:\n{:s}", e.what(), std::string_view(cur_data, data_len) | std::views::chunk(128) | std::views::join_with('\n')));
 					}
-					return (!parse_task.coro_handle.done());
+					if (parse_task.coro_handle.done())
+					{
+						throw std::runtime_error(fmt::format("JSON parsing ended prematurely.\nOccured in section:\n{:s}", std::string_view(cur_data, data_len) | std::views::chunk(128) | std::views::join_with('\n')));
+					}
+					return true;
 				});
 			if (!res)
 			{
-				fl_alert("HTTP Error %d", res.error());
-				return;
+				throw std::runtime_error("HTTP Error: " + httplib::to_string(res.error()));
 			}
 			if (res->status != 200)
 			{
-				fl_alert("Unexpected HTTP Status %d", res->status);
-				return;
+				throw std::runtime_error(std::format("Unexpected HTTP Status {}", res->status));
 			}
 		}
 		catch (const std::runtime_error& e)
@@ -322,6 +339,7 @@ int main()
 	http_client.set_connection_timeout(0, 500'000); // 500 ms
 	http_client.set_read_timeout(2);  // 2 s
 	http_client.set_write_timeout(2); // 2 s
+	http_client.set_url_encode(false);
 	
 	Fl::get_system_colors();
 

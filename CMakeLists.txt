@@ -7,7 +7,7 @@ option(USE_ASAN "Use address sanitizer in debug config" TRUE)
 find_package(FLTK 1.4 REQUIRED)
 find_package(OpenSSL REQUIRED)
 
-add_executable(dictionary "src/main.cpp" "src/styles.h" )
+add_executable(dictionary "src/main.cpp")
 
 if (NOT $<CONFIG:Debug>)
 	set_target_properties(dictionary PROPERTIES WIN32_EXECUTABLE TRUE MACOSX_BUNDLE TRUE)

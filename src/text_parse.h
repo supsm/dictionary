@@ -265,7 +265,7 @@ constexpr auto max_token_len = tokens_data.second;
 void parse_def_text(std::string_view text, const auto& add, const auto& get_pos)
 {
 	// TODO: {inf}, {p_br}, {sup}, {gloss},
-	// {dx}, {dx_def}, {dx_ety}, {ma}, {a_link}, {d_link}, {dxt}, {et_link}, {i_link}, {mat}, {sx}, {ds}
+	// {dx}, {dx_def}, {dx_ety}, {ma}, {dxt}, {ds}
 	std::size_t start_ind = 0, brace_start = 0;
 	bool in_brace = false, found_token = false;
 	int last_search_res = 0;
