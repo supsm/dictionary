@@ -38,11 +38,17 @@ private:
 		return -1;
 	}
 
+protected:
+	using Fl_Text_Display::mMaxsize;
+
 public:
 	using Fl_Text_Display::Fl_Text_Display;
 
 	int handle(int event) override
 	{
+		if (mMaxsize == 0) // causes xy_to_position to div by 0
+			{ return Fl_Text_Display::handle(event); }
+
 		switch (event)
 		{
 		case FL_ENTER: [[fallthrough]];
