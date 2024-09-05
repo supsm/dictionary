@@ -313,6 +313,8 @@ void search_word(std::string_view word)
 		ui.text_display.scroll(lines + 1, 0);
 		ui.text_buf.select(target_word.first, target_word.second - 1);
 	}
+	else
+		{ ui.text_display.scroll(0, 0); }
 }
 
 void search_word(Fl_Widget*)
