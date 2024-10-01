@@ -115,11 +115,11 @@ rha_wrapper(std::move(CONCAT(detail_t_ret_, __LINE__)))
 // use return value of `func` as the condition of a while loop
 // OPEN BRACE IS APPLIED IN MACRO AND NEEDS TO BE CLOSED
 // Example usage:
-// ```
+// @code
 // CO_WHILE(foo, arg1, arg2, arg3)
 //     loop_body
 // }
-// ```
+// @endcode
 // note: it's possible to make this accept a tuple-like structure for args
 //       and have the loop body as another macro arg (such that the closing
 //       paren of the macro denotes loop end), but that makes debugging a pain

@@ -12,6 +12,7 @@
 #define FMT_HEADER_ONLY
 #define FMT_UNICODE false
 #include <fmt/ranges.h>
+#include <jsoncons_ext/cbor/cbor.hpp>
 #include <FL/fl_ask.H>
 
 #include "ui.h"
@@ -26,6 +27,7 @@ FLTK_UI ui;
 std::string api_key;
 httplib::SSLClient http_client("www.dictionaryapi.com");
 std::string last_word = "";
+dictionary_file dict_file;
 
 // TODO: save/restore scroll location and selections?
 struct cached_def
@@ -345,6 +347,7 @@ int main()
 	
 	Fl::get_system_colors();
 
+	dict_file.open("data.sdict");
 	{
 		std::ifstream fin("api_key.txt");
 		if (!fin)
@@ -354,6 +357,7 @@ int main()
 		}
 		fin >> api_key;
 	}
+	
 	ui.window.show();
 	Fl::run();
 }
