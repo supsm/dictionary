@@ -34,7 +34,8 @@ struct cached_def
 {
 	struct buf_data
 	{
-		char* buf;
+		// fltk uses malloc/free so we need custom deleter
+		std::unique_ptr<char, decltype([](char* p) { std::free(p); })> buf;
 		int length, gap_start, gap_end;
 	};
 	std::string word;
@@ -87,8 +88,8 @@ void clear_and_cache()
 	int& style_buf_mPreferredGapSize = style_buf.*get(Fl_Text_Buffer_m<"mPreferredGapSize", int>());	
 
 	// copy old data (buffers are NOT copied, just the pointer address)
-	cached_def::buf_data text_buf_data = { text_buf_mBuf, text_buf_mLength, text_buf_mGapStart, text_buf_mGapEnd };
-	cached_def::buf_data style_buf_data = { style_buf_mBuf, style_buf_mLength, style_buf_mGapStart, style_buf_mGapEnd };
+	cached_def::buf_data text_buf_data = { decltype(cached_def::buf_data::buf)(text_buf_mBuf), text_buf_mLength, text_buf_mGapStart, text_buf_mGapEnd };
+	cached_def::buf_data style_buf_data = { decltype(cached_def::buf_data::buf)(style_buf_mBuf), style_buf_mLength, style_buf_mGapStart, style_buf_mGapEnd };
 
 	if constexpr (do_reset)
 	{
@@ -109,8 +110,8 @@ void clear_and_cache()
 		(style_buf.*get(Fl_Text_Buffer_m<"update_selections", void(int, int, int)>()))(0, style_buf_data.length, 0);
 
 		// TODO: do we need to remove the gap for this?
-		(text_buf.*get(Fl_Text_Buffer_m<"call_modify_callbacks", void(int, int, int, int, const char*) const>()))(0, text_buf_data.length, 0, 0, text_buf_data.buf);
-		(style_buf.*get(Fl_Text_Buffer_m<"call_modify_callbacks", void(int, int, int, int, const char*) const>()))(0, style_buf_data.length, 0, 0, style_buf_data.buf);
+		(text_buf.*get(Fl_Text_Buffer_m<"call_modify_callbacks", void(int, int, int, int, const char*) const>()))(0, text_buf_data.length, 0, 0, text_buf_data.buf.get());
+		(style_buf.*get(Fl_Text_Buffer_m<"call_modify_callbacks", void(int, int, int, int, const char*) const>()))(0, style_buf_data.length, 0, 0, style_buf_data.buf.get());
 	}
 
 	if constexpr (do_cache)
@@ -145,7 +146,15 @@ void restore_from_cache(std::size_t ind)
 	int& text_buf_mGapEnd = text_buf.*get(Fl_Text_Buffer_m<"mGapEnd", int>());
 	int& style_buf_mGapEnd = style_buf.*get(Fl_Text_Buffer_m<"mGapEnd", int>());
 
-	// the current buffers should already be cached
+	if (cur_cached_ind == cached_defs.size())
+		{ clear_and_cache<false, true>(); }
+	else
+	{
+		// bufs would have been released when restored, we need to cache them again
+		cached_defs[cur_cached_ind].def_text.buf.reset(text_buf_mBuf);
+		cached_defs[cur_cached_ind].def_style.buf.reset(style_buf_mBuf);
+	}
+
 	char* old_text_buf = text_buf_mBuf;
 	char* old_style_buf = style_buf_mBuf;
 	int old_text_length = text_buf_mLength;
@@ -154,9 +163,9 @@ void restore_from_cache(std::size_t ind)
 	(text_buf.*get(Fl_Text_Buffer_m<"call_predelete_callbacks", void(int, int) const>()))(0, old_text_length);
 	(style_buf.*get(Fl_Text_Buffer_m<"call_predelete_callbacks", void(int, int) const>()))(0, old_style_length);
 
-	const cached_def& cached = cached_defs[ind];
-	text_buf_mBuf = cached.def_text.buf;
-	style_buf_mBuf = cached.def_style.buf;
+	cached_def& cached = cached_defs[ind];
+	text_buf_mBuf = cached.def_text.buf.release();
+	style_buf_mBuf = cached.def_style.buf.release();
 	text_buf_mLength = cached.def_text.length;
 	style_buf_mLength = cached.def_style.length;
 	text_buf_mGapStart = cached.def_text.gap_start;
