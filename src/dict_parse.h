@@ -1,6 +1,7 @@
 #ifndef DICT_PARSE_H
 #define DICT_PARSE_H
 
+#include <concepts>
 #include <stdexcept>
 #include <vector>
 
@@ -12,7 +13,7 @@
 // parse the `meta` field for `id`, `stems`, `offensive`
 // expects cursor to be at begin_object of `meta`, but does not validate
 // leaves cursor after end_object
-task<void> parse_meta(json_coro_cursor& cursor, word_info& data)
+task<void> parse_meta(coro_cursor auto& cursor, word_info& data)
 {
 	using json_type = jsoncons::staj_event_type;
 	CO_CALL(cursor.next_); // consume begin object
@@ -39,7 +40,7 @@ task<void> parse_meta(json_coro_cursor& cursor, word_info& data)
 	CO_WHILE(recursive_skip_until_obj, cursor, meta_callbacks) /* { */ }
 }
 
-task<void> parse_sdsense(json_coro_cursor& cursor, word_info& data)
+task<void> parse_sdsense(coro_cursor auto& cursor, word_info& data)
 {
 	using json_type = jsoncons::staj_event_type;
 	CO_CALL(cursor.next_); // consume begin object
@@ -80,7 +81,7 @@ task<void> parse_sdsense(json_coro_cursor& cursor, word_info& data)
 // expects cursor to be after key, but does not validate
 // leaves cursor after end_object
 template<bool is_trunc = false>
-task<void> parse_sense(json_coro_cursor& cursor, word_info& data)
+task<void> parse_sense(coro_cursor auto& cursor, word_info& data)
 {
 	using json_type = jsoncons::staj_event_type;
 	CO_CALL(cursor.next_); // consume begin object
@@ -129,9 +130,7 @@ task<void> parse_sense(json_coro_cursor& cursor, word_info& data)
 	}
 }
 
-constexpr auto& parse_sen = parse_sense<true>;
-
-task<void> parse_bs(json_coro_cursor& cursor, word_info& data)
+task<void> parse_bs(coro_cursor auto& cursor, word_info& data)
 {
 	CO_CALL(cursor.next_); // consume begin object (bs)
 	CO_CALL(cursor.next_); // consume "sense" key
@@ -140,7 +139,7 @@ task<void> parse_bs(json_coro_cursor& cursor, word_info& data)
 	CO_CALL(recursive_skip, cursor); // consume sub-array (in pseq)
 }
 
-task<void> parse_pseq(json_coro_cursor& cursor, word_info& data)
+task<void> parse_pseq(coro_cursor auto& cursor, word_info& data)
 {
 	CO_CALL(cursor.next_); // consume begin array
 	
@@ -163,7 +162,7 @@ task<void> parse_pseq(json_coro_cursor& cursor, word_info& data)
 // which contains `sense`, `sen`, `pseq`, `bs`
 // expects cursor to be at begin_array, but does not validate
 // leaves cursor after end_array
-task<void> parse_sseq_element(json_coro_cursor& cursor, word_info& data)
+task<void> parse_sseq_element(coro_cursor auto& cursor, word_info& data)
 {
 	CO_CALL(cursor.next_); // consume begin array
 	
@@ -176,7 +175,7 @@ task<void> parse_sseq_element(json_coro_cursor& cursor, word_info& data)
 			} },
 		{ "sen", [&cursor, &data]() -> task<void>
 			{
-				CO_CALL(parse_sen, cursor, data);
+				CO_CALL(parse_sense<true>, cursor, data);
 				CO_CALL(recursive_skip, cursor); // consume sub-array
 			} },
 		{ "pseq", CO_BIND_VOID(parse_pseq, cursor, data) },
@@ -189,7 +188,7 @@ task<void> parse_sseq_element(json_coro_cursor& cursor, word_info& data)
 // parse a `sseq` array from a def object
 // expects cursor to be at begin_array, but does not validate
 // leaves cursor after end_array
-task<void> parse_sseq(json_coro_cursor& cursor, word_info& data)
+task<void> parse_sseq(coro_cursor auto& cursor, word_info& data)
 {
 	CO_CALL(cursor.next_); // consume begin array
 	
@@ -204,7 +203,7 @@ task<void> parse_sseq(json_coro_cursor& cursor, word_info& data)
 // parse a single object from the `def` array
 // expects cursor to be at begin_object, but does not validate
 // leaves cursor after end_object
-task<void> parse_single_def(json_coro_cursor& cursor, word_info& data)
+task<void> parse_single_def(coro_cursor auto& cursor, word_info& data)
 {
 	using json_type = jsoncons::staj_event_type;
 	CO_CALL(cursor.next_); // consume begin object
@@ -220,7 +219,7 @@ task<void> parse_single_def(json_coro_cursor& cursor, word_info& data)
 // parse the `def` field
 // expects cursor to be at begin_array of `def`, but does not validate
 // leaves cursor after end_array
-task<void> parse_def(json_coro_cursor& cursor, word_info& data)
+task<void> parse_def(coro_cursor auto& cursor, word_info& data)
 {
 	using json_type = jsoncons::staj_event_type;
 	CO_CALL(cursor.next_); // consume begin array
@@ -234,7 +233,7 @@ task<void> parse_def(json_coro_cursor& cursor, word_info& data)
 	CO_WHILE(recursive_skip_until_arr, cursor, def_callbacks) /* { */ }
 }
 
-task<void> begin_parse(json_coro_cursor& cursor, std::vector<word_info>& data)
+task<void> begin_parse(coro_cursor auto& cursor, std::vector<word_info>& data)
 {
 	CO_CALL(cursor.init);
 	

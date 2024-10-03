@@ -44,7 +44,7 @@ using json_key_arr_callbacks = std::array<std::tuple<std::string_view, std::func
 // skip events until current object/array is consumed
 // expects cursor to have consumed the begin obj/arr
 // leaves cursor after the end obj/arr
-task<void> recursive_skip(json_coro_cursor& cursor)
+task<void> recursive_skip(coro_cursor auto& cursor)
 {
 	int num_levels = 0;
 	for (; !cursor.done();)
@@ -78,7 +78,7 @@ task<void> recursive_skip(json_coro_cursor& cursor)
 // or AFTER end object if entire object is consumed
 // @param condition  callable that accepts a jsoncons event and key (string_view) and returns true to end
 // @return false if entire object is consumed, true if condition is met
-task<bool> recursive_skip_until_obj(json_coro_cursor& cursor, JsonObjectCondition auto condition)
+task<bool> recursive_skip_until_obj(coro_cursor auto& cursor, JsonObjectCondition auto condition)
 {
 	std::string_view last_key;
 	int num_levels = 0;
@@ -131,7 +131,7 @@ task<bool> recursive_skip_until_obj(json_coro_cursor& cursor, JsonObjectConditio
 
 // skip events until a desired field is found on the current level, or entire json object is consumed
 // see `condition` overload
-task<bool> recursive_skip_until_obj(json_coro_cursor& cursor, std::string_view key, jsoncons::staj_event_type event_type)
+task<bool> recursive_skip_until_obj(coro_cursor auto& cursor, std::string_view key, jsoncons::staj_event_type event_type)
 {
 	bool val;
 	CO_CALL(recursive_skip_until_obj, cursor, [event_type, key](const auto& cur_event, std::string_view last_key) -> task<bool>
@@ -144,7 +144,7 @@ task<bool> recursive_skip_until_obj(json_coro_cursor& cursor, std::string_view k
 //                   each key and event type should be unique, and the callback should consume the value fully
 // see `condition` overload
 template<std::size_t size>
-task<bool> recursive_skip_until_obj(json_coro_cursor& cursor, const json_obj_callbacks<size>& callbacks)
+task<bool> recursive_skip_until_obj(coro_cursor auto& cursor, const json_obj_callbacks<size>& callbacks)
 {
 	bool val;
 	CO_CALL(recursive_skip_until_obj, cursor, [&callbacks](const auto& cur_event, std::string_view last_key) -> task<bool>
@@ -169,7 +169,7 @@ task<bool> recursive_skip_until_obj(json_coro_cursor& cursor, const json_obj_cal
 // or AFTER end array if entire array is consumed
 // @param condition  callable that accepts a jsoncons event and returns true to end
 // @return false if entire array is consumed, true if condition is met
-task<bool> recursive_skip_until_arr(json_coro_cursor& cursor, JsonArrayCondition auto condition)
+task<bool> recursive_skip_until_arr(coro_cursor auto& cursor, JsonArrayCondition auto condition)
 {
 	int num_levels = 0;
 	for (; !cursor.done();)
@@ -209,7 +209,7 @@ task<bool> recursive_skip_until_arr(json_coro_cursor& cursor, JsonArrayCondition
 
 // skip events until a desired type is found on the current level, or entire json array is consumed
 // see `condition` overload
-task<bool> recursive_skip_until_arr(json_coro_cursor& cursor, jsoncons::staj_event_type event_type)
+task<bool> recursive_skip_until_arr(coro_cursor auto& cursor, jsoncons::staj_event_type event_type)
 {
 	bool val;
 	CO_CALL(recursive_skip_until_arr, cursor, [event_type](const auto& cur_event) -> task<bool>
@@ -222,7 +222,7 @@ task<bool> recursive_skip_until_arr(json_coro_cursor& cursor, jsoncons::staj_eve
 //                   each event type should be unique, and the callback should consume the element fully
 // see `condition` overload
 template<std::size_t size>
-task<bool> recursive_skip_until_arr(json_coro_cursor& cursor, const json_arr_callbacks<size>& callbacks)
+task<bool> recursive_skip_until_arr(coro_cursor auto& cursor, const json_arr_callbacks<size>& callbacks)
 {
 	bool val;
 	CO_CALL(recursive_skip_until_arr, cursor, [&callbacks](const auto& cur_event) -> task<bool>
@@ -250,7 +250,7 @@ task<bool> recursive_skip_until_arr(json_coro_cursor& cursor, const json_arr_cal
 // @param condition  callable that accepts a jsoncons event and returns true to end
 // @return false if entire main array is consumed, true if condition is met
 template<bool consume_after_cond = true>
-task<bool> recursive_skip_until_key_arr(json_coro_cursor& cursor, JsonKeyArrayCondition auto condition)
+task<bool> recursive_skip_until_key_arr(coro_cursor auto& cursor, JsonKeyArrayCondition auto condition)
 {
 	using json_type = jsoncons::staj_event_type;
 	CO_WHILE(recursive_skip_until_arr, cursor, json_type::begin_array)
@@ -278,7 +278,7 @@ task<bool> recursive_skip_until_key_arr(json_coro_cursor& cursor, JsonKeyArrayCo
 
 // skip events until a sub-array is found containing `key` as its first element, or entire json array is consumed
 // see `condition` overload
-task<bool> recursive_skip_until_key_arr(json_coro_cursor& cursor, std::string_view key)
+task<bool> recursive_skip_until_key_arr(coro_cursor auto& cursor, std::string_view key)
 {
 	bool val;
 	CO_CALL(recursive_skip_until_key_arr, cursor, [key](std::string_view cur_key) -> task<bool>
@@ -291,7 +291,7 @@ task<bool> recursive_skip_until_key_arr(json_coro_cursor& cursor, std::string_vi
 //                   each key should be unique, and the callback should consume the sub-array
 // see `condition` overload
 template<std::size_t size>
-task<bool> recursive_skip_until_key_arr(json_coro_cursor& cursor, const json_key_arr_callbacks<size>& callbacks)
+task<bool> recursive_skip_until_key_arr(coro_cursor auto& cursor, const json_key_arr_callbacks<size>& callbacks)
 {
 	// placing this within CO_CALL below causes
 	// compiler confusion with __LINE__

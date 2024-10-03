@@ -13,6 +13,30 @@
 
 #include "co_util.h"
 
+#include <concepts>
+
+template<typename T>
+concept coro_cursor =
+requires(T cursor,
+	jsoncons::basic_json_visitor<typename T::char_type> vis,
+	std::error_code ec,
+	std::function<bool(const jsoncons::basic_staj_event<typename T::char_type>&, const jsoncons::ser_context&)> pred)
+{
+	{ cursor.init() } -> std::same_as<task<void>>;
+	{ cursor.reset() } -> std::same_as<void>;
+	{ cursor.read_to_(vis) } -> std::same_as<task<void>>;
+	{ cursor.read_to_(vis, ec) } -> std::same_as<task<void>>;
+	{ cursor.next_() } -> std::same_as<task<void>>;
+	{ cursor.next_(ec) } -> std::same_as<task<void>>;
+	{ cursor | pred } -> std::same_as<jsoncons::basic_staj_filter_view<typename T::char_type>>;
+} &&
+requires(const T cursor)
+{
+	{ cursor.done() } -> std::same_as<bool>;
+	{ cursor.current() } -> std::same_as<const jsoncons::basic_staj_event<typename T::char_type>&>;
+	{ cursor.context() } -> std::same_as<const jsoncons::ser_context&>;
+};
+
 namespace jsoncons
 {
 	// modified json cursor using coroutines
@@ -21,6 +45,10 @@ namespace jsoncons
 	template<typename CharT, typename Allocator = std::allocator<CharT>>
 	class basic_json_coro_cursor : public basic_staj_cursor<CharT>, private virtual ser_context
 	{
+	public:
+		using char_type = CharT;
+		using allocator_type = Allocator;
+	
 	private:
 		basic_json_parser<CharT, Allocator> parser_;
 		basic_staj_visitor<CharT> cursor_visitor_;
@@ -177,5 +205,41 @@ public:
 }
 
 using json_coro_cursor = jsoncons::basic_json_coro_cursor<char>;
+
+// wraps a regular cursor in a coroutine-friendly interface
+// THE CURSOR WILL NOT BE SUSPENDABLE/RESUMABLE
+// cursor can be constructed in-place; constructor args for this class
+// are forwarded directly to cursor constructor
+template<typename CursorT>
+class cursor_coro_wrapper : public jsoncons::basic_staj_cursor<typename CursorT::char_type>
+{
+public:
+	using char_type = CursorT::char_type;
+
+private:
+	CursorT cursor;
+
+public:
+	template<typename... Args>
+	cursor_coro_wrapper(Args&&... args) : cursor(std::forward<Args>(args)...) {}
+
+	task<void> init() { co_return; }
+	void reset() { cursor.reset(); }
+	bool done() const override { return cursor.done(); }
+	const jsoncons::basic_staj_event<char_type>& current() const override { return cursor.current(); }
+	task<void> read_to_(jsoncons::basic_json_visitor<char_type>& vis) { cursor.read_to(vis); co_return; }
+	task<void> read_to_(jsoncons::basic_json_visitor<char_type>& vis, std::error_code& ec) { cursor.read_to(vis, ec); co_return; }
+	task<void> next_() { cursor.next(); co_return; }
+	task<void> next_(std::error_code& ec) { cursor.next(ec); co_return; }
+	const jsoncons::ser_context& context() const override { return cursor.context(); }
+	friend jsoncons::basic_staj_filter_view<char_type> operator|(cursor_coro_wrapper& cursor,
+		std::function<bool(const jsoncons::basic_staj_event<char_type>&, const jsoncons::ser_context&)> pred)
+		{ return operator|(cursor.cursor, pred); }
+private:
+	void next() override {}
+	void next(std::error_code& ec) override {}
+	void read_to(jsoncons::basic_json_visitor<char_type>&) override {}
+	void read_to(jsoncons::basic_json_visitor<char_type>&, std::error_code&) override {}
+};
 
 #endif

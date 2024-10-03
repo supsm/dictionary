@@ -1,5 +1,6 @@
 #include <cstdlib>
 #include <fstream>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -22,6 +23,7 @@
 #include "text_parse.h"
 #include "links.h"
 #include "util.h"
+#include "sdict_file.h"
 
 FLTK_UI ui;
 std::string api_key;
@@ -85,7 +87,7 @@ void clear_and_cache()
 	int& text_buf_mGapEnd = text_buf.*get(Fl_Text_Buffer_m<"mGapEnd", int>());
 	int& style_buf_mGapEnd = style_buf.*get(Fl_Text_Buffer_m<"mGapEnd", int>());
 	int& text_buf_mPreferredGapSize = text_buf.*get(Fl_Text_Buffer_m<"mPreferredGapSize", int>());
-	int& style_buf_mPreferredGapSize = style_buf.*get(Fl_Text_Buffer_m<"mPreferredGapSize", int>());	
+	int& style_buf_mPreferredGapSize = style_buf.*get(Fl_Text_Buffer_m<"mPreferredGapSize", int>());
 
 	// copy old data (buffers are NOT copied, just the pointer address)
 	cached_def::buf_data text_buf_data = { decltype(cached_def::buf_data::buf)(text_buf_mBuf), text_buf_mLength, text_buf_mGapStart, text_buf_mGapEnd };
@@ -131,8 +133,6 @@ void restore_from_cache(std::size_t ind)
 		fl_alert("Trying to restore from invalid cache index %uz (cache size %uz)", ind, cached_defs.size());
 		return;
 	}
-	if (cur_cached_ind == cached_defs.size())
-		{ clear_and_cache<false, true>(); }
 
 	Fl_Text_Buffer& text_buf = ui.text_buf;
 	Fl_Text_Buffer& style_buf = ui.style_buf;
@@ -145,7 +145,7 @@ void restore_from_cache(std::size_t ind)
 	int& style_buf_mGapStart = style_buf.*get(Fl_Text_Buffer_m<"mGapStart", int>());
 	int& text_buf_mGapEnd = text_buf.*get(Fl_Text_Buffer_m<"mGapEnd", int>());
 	int& style_buf_mGapEnd = style_buf.*get(Fl_Text_Buffer_m<"mGapEnd", int>());
-
+	
 	if (cur_cached_ind == cached_defs.size())
 		{ clear_and_cache<false, true>(); }
 	else
@@ -189,56 +189,79 @@ void search_word(std::string_view word)
 {
 	const auto word_colon = word.rfind(':');
 	std::vector<word_info> data;
-	
+
 	{
-		json_coro_cursor cursor;
-		auto parse_task = begin_parse(cursor, data);
-		
 		std::string_view word_only = word;
 		if (word_colon != std::string_view::npos)
 			{ word_only = word.substr(0, word_colon); }
-		
-		// TODO: local lookup
+
+		std::optional<std::vector<char>> dict_res;
+		try
+			{ dict_res = dict_file.find(word); }
+		catch (const std::exception& e)
+			{ fl_alert("%s", e.what()); return; }
+
 		try
 		{
-			static constexpr auto url_encode = [](std::string_view in)
+			const auto parse_data = [](auto& parse_task, const char* data, std::size_t data_len)
 			{
-				std::string s;
-				for (char c : in)
+				try
+					{ parse_task.add_data({ data, data_len }); }
+				catch (const std::exception& e)
 				{
-					if (('A' <= c && c <= 'Z') ||
-						('a' <= c && c <= 'z') ||
-						('0' <= c && c <= '9') ||
-						c == '-' || c == '.' || c == '_' || c == '~')
-						{ s += c; }
-					else
-						{ s += std::format("{:X}", c); }
+					// TODO: replace with std::format once range formatter is more mature
+					throw std::runtime_error(fmt::format("JSON parse error: {}\nOccured in section:\n{:s}", e.what(), std::string_view(data, data_len) | std::views::chunk(128) | std::views::join_with('\n')));
 				}
-				return s;
-			};
-			auto res = http_client.Get(httplib::append_query_params("/api/v3/references/collegiate/json/" + url_encode(word_only), { { "key", api_key } }),
-				[&parse_task](const char* cur_data, std::size_t data_len)
+				if (parse_task.coro_handle.done())
 				{
-					try
-						{ parse_task.add_data({ cur_data, data_len }); }
-					catch (const std::exception& e)
-					{
-						// TODO: replace with std::format once range formatter is more mature
-						throw std::runtime_error(fmt::format("JSON parse error: {}\nOccured in section:\n{:s}", e.what(), std::string_view(cur_data, data_len) | std::views::chunk(128) | std::views::join_with('\n')));
-					}
-					if (parse_task.coro_handle.done())
-					{
-						throw std::runtime_error(fmt::format("JSON parsing ended prematurely.\nOccured in section:\n{:s}", std::string_view(cur_data, data_len) | std::views::chunk(128) | std::views::join_with('\n')));
-					}
-					return true;
-				});
-			if (!res)
+					throw std::runtime_error(fmt::format("JSON parsing ended prematurely.\nOccured in section:\n{:s}", std::string_view(data, data_len) | std::views::chunk(128) | std::views::join_with('\n')));
+				}
+			};
+
+
+			if (dict_res)
 			{
-				throw std::runtime_error("HTTP Error: " + httplib::to_string(res.error()));
+				// TODO: cbor parsing doesn't fill `id` for some reason
+				auto cursor = cursor_coro_wrapper<jsoncons::cbor::cbor_bytes_cursor>(dict_res.value());
+				try
+				{
+					task<void> parse_task = begin_parse(cursor, data);
+					if (!parse_task.coro_handle.done())
+						{ throw std::runtime_error("CBOR parsing did not finish"); }
+				}
+				catch (const std::exception& e)
+					{ throw std::runtime_error(std::format("CBOR parse error: {}", e.what())); }
 			}
-			if (res->status != 200)
+			else
 			{
-				throw std::runtime_error(std::format("Unexpected HTTP Status {}", res->status));
+				json_coro_cursor cursor;
+				task<void> parse_task = begin_parse(cursor, data);
+
+				static constexpr auto url_encode = [](std::string_view in)
+				{
+					std::string s;
+					for (char c : in)
+					{
+						if (('A' <= c && c <= 'Z') ||
+							('a' <= c && c <= 'z') ||
+							('0' <= c && c <= '9') ||
+							c == '-' || c == '.' || c == '_' || c == '~')
+							{ s += c; }
+						else
+							{ s += std::format("{:X}", c); }
+					}
+					return s;
+				};
+				auto res = http_client.Get(httplib::append_query_params("/api/v3/references/collegiate/json/" + url_encode(word_only), { { "key", api_key } }),
+					[&parse_data, &parse_task](const char* cur_data, std::size_t data_len) { parse_data(parse_task, cur_data, data_len); return true; });
+				if (!res)
+				{
+					throw std::runtime_error("HTTP Error: " + httplib::to_string(res.error()));
+				}
+				if (res->status != 200)
+				{
+					throw std::runtime_error(std::format("Unexpected HTTP Status {}", res->status));
+				}
 			}
 		}
 		catch (const std::runtime_error& e)
@@ -247,7 +270,7 @@ void search_word(std::string_view word)
 			return;
 		}
 	}
-	
+
 	if (!last_word.empty() && cur_cached_ind == cached_defs.size())
 		{ clear_and_cache(); }
 	else
@@ -264,23 +287,23 @@ void search_word(std::string_view word)
 	// (which might be optimized out anyway)
 	std::vector<char> text_buf, style_buf;
 	std::pair<std::size_t, std::size_t> target_word = { -1, -1 };
-	
+
 	const auto add = [&text_buf, &style_buf](std::string_view text, char style = get_style())
 	{
 		text_buf.append_range(text);
 		style_buf.append_range(std::views::repeat(style, text.size()));
 	};
-	
+
 	for (const auto& w : data)
 	{
 		const std::size_t start_len = text_buf.size();
-		
+
 		add(w.id, get_style(style::title));
 		add("\n");
-		
+
 		if (word_colon != std::string_view::npos && word == w.id)
 			{ target_word = { start_len, text_buf.size() }; }
-		
+
 		for (const auto& sense : w.defs)
 		{
 			const auto add_sense = [&text_buf, &add](this auto self, const auto& val)
@@ -353,7 +376,7 @@ int main()
 	http_client.set_read_timeout(2);  // 2 s
 	http_client.set_write_timeout(2); // 2 s
 	http_client.set_url_encode(false);
-	
+
 	Fl::get_system_colors();
 
 	dict_file.open("data.sdict");
