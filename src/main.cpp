@@ -221,7 +221,6 @@ void search_word(std::string_view word)
 
 			if (dict_res)
 			{
-				// TODO: cbor parsing doesn't fill `id` for some reason
 				auto cursor = cursor_coro_wrapper<jsoncons::cbor::cbor_bytes_cursor>(dict_res.value());
 				try
 				{

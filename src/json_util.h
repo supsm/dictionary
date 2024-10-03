@@ -80,7 +80,7 @@ task<void> recursive_skip(coro_cursor auto& cursor)
 // @return false if entire object is consumed, true if condition is met
 task<bool> recursive_skip_until_obj(coro_cursor auto& cursor, JsonObjectCondition auto condition)
 {
-	std::string_view last_key;
+	std::string last_key;
 	int num_levels = 0;
 	for (; !cursor.done();)
 	{
@@ -92,7 +92,8 @@ task<bool> recursive_skip_until_obj(coro_cursor auto& cursor, JsonObjectConditio
 		{
 			if (cur_event.event_type() == json_type::key)
 			{
-				last_key = cur_event.get<std::string_view>();
+				// last_key needs to be a copy here as cur_event could change (which would change the contents of a string_view)
+				last_key = cur_event.get<std::string>();
 			}
 			else
 			{
