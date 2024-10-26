@@ -15,6 +15,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <vector>
 
 // file containing dictionary info (words and definitions)
@@ -32,6 +33,7 @@
 //     word word word word ... (num_words in total, null terminated; occupies words_size bytes)
 // (defs section)
 //     def def def def ... (num_words in total; each def contains a unsigned 32-bit (4-byte LE) integer as size)
+// TODO: should we store a definition hash along with the size?
 class dictionary_file
 {
 private:
@@ -78,6 +80,9 @@ private:
 	// (i.e. starts from 0, despite indices starting from 1 on disk)
 	std::vector<word_info> words;
 	std::size_t first_new_word = -1;
+	
+	// map of def size and hash to inds
+	std::unordered_map<std::uint32_t, std::unordered_map<std::uint64_t, std::vector<std::uint32_t>>> existing_defs;
 
 public:
 	// true if a file was created on construction, false if it was read from
@@ -87,8 +92,9 @@ public:
 	// open(string_view) must be called before anything else
 	dictionary_file() {}
 
+	// @param load_defs  whether to load definitions for deduplication (expensive)
 	// @throws std::runtime_error  on file i/o error or if parsing receives an unexpected value
-	dictionary_file(std::string_view filename) : filename(filename), file_open_type(open_type::none)
+	dictionary_file(std::string_view filename, bool load_defs = true) : filename(filename), file_open_type(open_type::none)
 	{
 		if (!std::filesystem::is_regular_file(filename))
 		{
@@ -100,6 +106,14 @@ public:
 		else
 		{
 			open();
+			if (load_defs)
+			{
+				for (const auto& [word, def_ind] : words)
+				{
+					const auto [size, hash] = hash_existing_def(def_ind);
+					existing_defs[size][hash].push_back(def_ind); // keep old def_ind value if exists
+				}
+			}
 		}
 	}
 
@@ -117,11 +131,20 @@ public:
 	// Complexity: O(reserved_words + total_words_len + N*log(N)), where N is number of words
 	// File Access: Read, magic_bytes.size() + 8 + reserved_words * 8 + total_words_len
 	// @throws std::runtime_error  on file i/o or parsing error
-	void open(std::string_view filename_)
+	void open(std::string_view filename_, bool load_defs = true)
 	{
 		filename = filename_;
 		file_open_type = open_type::none;
 		open();
+		if (load_defs)
+		{
+			existing_defs.clear();
+			for (const auto& [word, def_ind] : words)
+			{
+				const auto [size, hash] = hash_existing_def(def_ind);
+				existing_defs[size][hash].push_back(def_ind); // keep old def_ind value if exists
+			}
+		}
 	}
 
 	// open file as input and read contents
@@ -253,28 +276,37 @@ public:
 		if (first_new_word == -1)
 			{ first_new_word = words.size(); }
 		
-		open_in_out();
-		
-		// add def to words
-		file.seekp(0, std::ios::end);
-		std::streamoff cur_def_offset = file.tellg();
-		cur_def_offset -= defs_section_offset();
-		if (cur_def_offset < 0)
-			{ throw std::runtime_error("Incorrect file size (too small)"); }
-		words.emplace_back(std::string(word), cur_def_offset);
-		
-		// add def to file
-		write_uint32_LE(def.size());
-		file.write(reinterpret_cast<const char*>(def.data()), def.size());
+		if (auto def_ind = get_existing_def_ind(def))
+		{
+			words.emplace_back(std::string(word), def_ind.value());
+		}
+		else
+		{
+			open_in_out();
+			
+			// add def to words
+			file.seekg(0, std::ios::end);
+			std::streamoff cur_def_offset = file.tellg();
+			assert(cur_def_offset >= defs_section_offset());
+			cur_def_offset -= defs_section_offset();
+			if (cur_def_offset < 0)
+				{ throw std::runtime_error("Incorrect file size (too small)"); }
+			words.emplace_back(std::string(word), cur_def_offset);
+
+			// add def to existing_defs
+			existing_defs[def.size()][fnv1a(def)].push_back(cur_def_offset);
+			
+			// add def to file
+			write_uint32_LE(def.size());
+			file.write(reinterpret_cast<const char*>(def.data()), def.size());
+		}
 		
 		if constexpr (flush_words)
 			{ flush(); }
 		return true;
 	}
-	// see other overload
 	template<bool flush_words = true, bool skip_dup_check = false>
-	bool add_word(std::string_view word, std::span<const char> def)
-		{ return add_word<flush_words, skip_dup_check>(word, std::as_bytes(def)); }
+	bool add_word(std::string_view word, std::span<const char> def) { return add_word<flush_words, skip_dup_check>(word, std::as_bytes(def)); }
 	
 	// Complexity: O(log(n_words))
 	// File Access: No
@@ -329,6 +361,7 @@ private:
 	}
 
 	// open file as input and output
+	// file will not be created if it doesn't exist
 	// allows for overwriting output instead of having it deleted
 	// leaves file as read + write
 	void open_in_out()
@@ -343,32 +376,35 @@ private:
 	}
 	
 	// expects file to be readable
-	std::uint32_t read_uint32_LE()
+	static std::uint32_t read_uint32_LE(std::fstream& fin)
 	{
 		std::uint32_t val = 0;
 		char chars[4];
-		file.read(chars, 4);
+		fin.read(chars, 4);
 		val += static_cast<unsigned char>(chars[0]);
 		val += static_cast<unsigned char>(chars[1]) << 8;
 		val += static_cast<unsigned char>(chars[2]) << 16;
 		val += static_cast<unsigned char>(chars[3]) << 24;
 		return val;
 	}
+	std::uint32_t read_uint32_LE() { return read_uint32_LE(file); }
 	// expects file to be writable
-	void write_uint32_LE(std::uint32_t num)
+	static void write_uint32_LE(std::uint32_t num, std::fstream& fout)
 	{
-		file.put(static_cast<char>(static_cast<unsigned char>(num & 0xFF)));
-		file.put(static_cast<char>(static_cast<unsigned char>((num >> 8) & 0xFF)));
-		file.put(static_cast<char>(static_cast<unsigned char>((num >> 16) & 0xFF)));
-		file.put(static_cast<char>(static_cast<unsigned char>((num >> 24) & 0xFF)));
+		fout.put(static_cast<char>(static_cast<unsigned char>(num & 0xFF)));
+		fout.put(static_cast<char>(static_cast<unsigned char>((num >> 8) & 0xFF)));
+		fout.put(static_cast<char>(static_cast<unsigned char>((num >> 16) & 0xFF)));
+		fout.put(static_cast<char>(static_cast<unsigned char>((num >> 24) & 0xFF)));
 	}
+	void write_uint32_LE(std::uint32_t num) { write_uint32_LE(num, file); }
 
 	// expects file to be writable
-	void write_nulls(std::size_t count)
+	static void write_nulls(std::size_t count, std::fstream& fout)
 	{
 		for (std::size_t i = 0; i < count; i++)
-			{ file.put(0); }
+			{ fout.put(0); }
 	}
+	void write_nulls(std::size_t count) { write_nulls(count, file); }
 	
 	constexpr static std::streamoff inds_section_offset()
 	{
@@ -384,19 +420,80 @@ private:
 	{
 		return words_section_offset(reserved_words_) + words_sect_size_;
 	}
-	std::streamoff defs_section_offset() const
+	constexpr std::streamoff defs_section_offset() const
 		{ return defs_section_offset(reserved_words, words_sect_size); }
 	
-	// @throws std::runtime_error  if file is invalid
-	void check_file()
+	constexpr static std::uint64_t fnv_init = 0xcbf29ce484222325;
+	
+	// @param init  value to use for hash initialization. can be used to continue calculating a hash with additional data
+	constexpr static std::uint64_t fnv1a(std::span<const std::byte> data, std::uint64_t init = fnv_init)
 	{
-		if (file.bad())
+		std::uint64_t hash = init;
+		for (std::byte b : data)
+		{
+			hash ^= std::to_integer<std::uint64_t>(b);
+			hash *= 0x100000001b3;
+		}
+		return hash;
+	}
+
+	// @return pair of size and hash. returns { 0, 0 } on error
+	std::pair<std::uint32_t, std::uint64_t> hash_existing_def(std::uint32_t def_ind, std::uint32_t expected_size, std::streamoff defs_section_offset_)
+	{
+		std::uint64_t hash = fnv_init;
+
+		auto def_off = defs_section_offset_ + def_ind;
+		file.seekg(def_off, std::ios::beg);
+		std::uint32_t size = read_uint32_LE();
+		check_file();
+		if (size == 0)
+			{ throw std::runtime_error("Read 0 definition size. File may be corrupted"); }
+
+		if (expected_size != 0 && size != expected_size)
+			{ return { 0, 0 }; }
+
+		for (int i = 0; i < (size - 1) / batch_size + 1; i++) // (size / batch_size) rounded up
+		{
+			const auto [data, read_amt] = read_def_batched(i, size, def_off + 4);
+			check_file();
+			hash = fnv1a(std::as_bytes(std::span(data).subspan(0, read_amt)), hash);
+		}
+		return { size, hash };
+	}
+	std::pair<std::uint32_t, std::uint64_t> hash_existing_def(std::uint32_t def_ind, std::uint32_t expected_size = 0) { return hash_existing_def(def_ind, expected_size, defs_section_offset()); }
+	
+	std::optional<std::uint32_t> get_existing_def_ind(std::span<const std::byte> def)
+	{
+		assert(!def.empty() && static_cast<std::uint32_t>(def.size()) == def.size());
+		const std::uint32_t size = def.size();
+		const auto it = existing_defs.find(size);
+		if (it != existing_defs.end())
+		{
+			const auto hash = fnv1a(def);
+			const auto it2 = it->second.find(hash);
+			if (it2 != it->second.end())
+			{
+				for (const auto def_ind : it2->second)
+				{
+					if (hash_existing_def(def_ind, size) == std::make_pair(size, hash))
+						{ return def_ind; }
+				}
+			}
+		}
+		return {};
+	};
+	
+	// @throws std::runtime_error  if file is invalid
+	static void check_file(std::fstream& f)
+	{
+		if (f.bad())
 			{ throw std::runtime_error("Unrecoverable file I/O error"); }
-		if (file.eof())
+		if (f.eof())
 			{ throw std::runtime_error("Unexpected EOF"); }
-		if (file.fail())
+		if (f.fail())
 			{ throw std::runtime_error("File I/O error"); }
 	}
+	void check_file() { check_file(file); }
 
 	// leaves file as read only
 	void create_file()
@@ -461,6 +558,14 @@ private:
 			auto it = std::ranges::adjacent_find(v);
 			return (it != std::ranges::end(v));
 		};
+		// sort by first range and find duplicates in first range only
+		static const auto sort_and_find_dup_zipped = [](auto&&... args) -> bool
+		{
+			auto v = std::views::zip(std::forward<decltype(args)>(args)...);
+			std::ranges::sort(v, [](const auto& a, const auto& b) { return (std::get<0>(a) < std::get<0>(b)); });
+			auto it = std::ranges::adjacent_find(v, [](const auto& a, const auto& b) { return (std::get<0>(a) == std::get<0>(b)); });
+			return (it != std::ranges::end(v));
+		};
 
 		{
 			std::vector<std::uint32_t> word_inds, def_inds;
@@ -481,9 +586,11 @@ private:
 			if (word_inds.size() != num_words || def_inds.size() != num_words)
 				{ throw std::runtime_error("Incorrect number of valid indices. File may be corrupted"); }
 
-			if (sort_and_find_dup(word_inds) || sort_and_find_dup(def_inds))
+			// multiple words can share the same def_ind but word_inds must be unique
+			if (sort_and_find_dup_zipped(word_inds, def_inds))
 				{ throw std::runtime_error("Found repeated indices. File may be corrupted"); }
 
+			words.clear();
 			std::streamoff section_off = words_section_offset();
 			for (const auto [word_off, def_off] : std::views::zip(word_inds, def_inds))
 			{
@@ -521,74 +628,122 @@ private:
 
 		// create new file for output and swap with current file
 		const std::string new_file = filename + ".tmp";
-		std::fstream file2(new_file, std::ios::out | std::ios::binary);
-		file.swap(file2); // file = new file (write)
+		std::fstream file2(new_file, std::ios::in | std::ios::out | std::ios::binary | std::ios::trunc);
 		
 		// magic bytes
-		file.write(magic_bytes.data(), magic_bytes.size());
+		file2.write(magic_bytes.data(), magic_bytes.size());
 
-		write_uint32_LE(reserved_words);
-		write_uint32_LE(words_sect_size);
-		write_uint32_LE(words.size());
+		write_uint32_LE(reserved_words, file2);
+		write_uint32_LE(words_sect_size, file2);
+		write_uint32_LE(words.size(), file2);
 		
 		// inds section
 		std::uint32_t bytes_written = 0;
 		for (const auto& [word, def_ind] : words)
 		{
-			write_uint32_LE(bytes_written + 1);
+			write_uint32_LE(bytes_written + 1, file2);
 			bytes_written += word.size() + 1;
 		}
-		write_nulls((reserved_words - words.size()) * 4);
+		write_nulls((reserved_words - words.size()) * 4, file2);
 		// defs will be rearranged, just use a placeholder for now
-		write_nulls(reserved_words * 4);
+		write_nulls(reserved_words * 4, file2);
 		
 		// words section
 		bytes_written = 0;
 		for (const auto& [word, def_ind] : words)
 		{
-			file.write(word.c_str(), word.size() + 1); // write the null as well
+			file2.write(word.c_str(), word.size() + 1); // write the null as well
 			bytes_written += word.size() + 1;
 		}
-		write_nulls(words_sect_size - bytes_written);
+		write_nulls(words_sect_size - bytes_written, file2);
 
 		// defs section
 		{
-			file.swap(file2); // file = old file (read)
+			existing_defs.clear();
+
 			std::streampos defs_sect_start = file2.tellp();
-			std::streamoff old_sect_off = defs_section_offset(old_reserved_words, old_words_sect_size);
+			assert(defs_sect_start == defs_section_offset());
+			std::streamoff old_defs_sect_off = defs_section_offset(old_reserved_words, old_words_sect_size);
+			
 			for (auto& [word, def_ind] : words)
 			{
-				std::streamoff cur_def_off = old_sect_off + def_ind;
+				std::streamoff cur_def_off = old_defs_sect_off + def_ind;
 				file.seekg(cur_def_off, std::ios::beg);
 				std::uint32_t size = read_uint32_LE();
 				check_file();
 				if (size == 0)
 					{ throw std::runtime_error("Read 0 definition size. File may be corrupted"); }
+				
+				const auto it = existing_defs.find(size);
+				if (it != existing_defs.end())
+				{
+					const auto [size2, hash] = hash_existing_def(def_ind, size, old_defs_sect_off);
+					if (size2 == size)
+					{
+						const auto it2 = it->second.find(hash);
+						if (it2 != it->second.end())
+						{
+							bool found_match = false;
+							for (const std::streamoff found_def_ind : it2->second)
+							{
+								file.seekg(cur_def_off, std::ios::beg);
+								auto read_size = read_uint32_LE();
+								check_file();
+								if (read_size != size)
+									{ continue; }
+								file2.seekg(defs_sect_start + found_def_ind, std::ios::beg);
+								read_size = read_uint32_LE(file2);
+								check_file(file2);
+								if (read_size != size)
+									{ continue; }
 
+								static constexpr std::size_t cmp_batch_size = 1024;
+								bool mismatch = false;
+								for (int i = 0; i < (size - 1) / batch_size + 1; i++) // (size / cmp_batch_size) rounded up
+								{
+									const auto [data, read_amt] = read_def_batched(i, size, cur_def_off + 4);
+									check_file();
+									const auto [data2, read_amt2] = read_def_batched(i, size, defs_sect_start + (found_def_ind + 4), file2);
+									check_file(file2);
+									if (read_amt != read_amt2 || data != data2)
+										{ mismatch = true; break; }
+								}
+								if (!mismatch)
+									{ def_ind = found_def_ind; found_match = true; break; }
+							}
+							if (found_match)
+								{ continue; }
+						}
+					}
+				}
+
+				file2.seekp(0, std::ios::end);
 				def_ind = file2.tellp() - defs_sect_start;
 
-				file.swap(file2); // file = new file (write)
-				write_uint32_LE(size);
-				file.swap(file2); // file = old file (read)
+				write_uint32_LE(size, file2);
+				
+				std::uint64_t hash = fnv_init;
 				for (int i = 0; i < (size - 1) / batch_size + 1; i++) // (size / batch_size) rounded up
 				{
 					const auto [data, read_amt] = read_def_batched(i, size, cur_def_off + 4);
 					check_file();
 					file2.write(data.data(), read_amt);
+					hash = fnv1a(std::as_bytes(std::span(data).subspan(0, read_amt)), hash);
 				}
+				
+				assert(!std::ranges::contains(existing_defs[size][hash], def_ind));
+				existing_defs[size][hash].push_back(def_ind);
 			}
-			file.swap(file2); // file = new file (write)
 		}
 
 		// update def inds
-		file.seekp(inds_section_offset() + reserved_words * 4, std::ios::beg);
+		file2.seekp(inds_section_offset() + reserved_words * 4, std::ios::beg);
 		for (const auto& [word, def_ind] : words)
-			{ write_uint32_LE(def_ind + 1); }
-		write_nulls((reserved_words - words.size()) * 4);
+			{ write_uint32_LE(def_ind + 1, file2); }
+		write_nulls((reserved_words - words.size()) * 4, file2);
 
 		file.close();
 		file2.close();
-
 		std::filesystem::rename(new_file, filename);
 
 		open_in();
@@ -634,15 +789,16 @@ private:
 	// @param size  total size of definition
 	// @param data_start_pos  start position of DATA ONLY (EXCLUDES DATA SIZE)
 	// @return pair of data array and number of bytes read
-	std::pair<std::array<char, batch_size>, std::size_t> read_def_batched(int batch_ind, std::uint32_t size, std::streamoff data_start_pos)
+	static std::pair<std::array<char, batch_size>, std::size_t> read_def_batched(int batch_ind, std::uint32_t size, std::streamoff data_start_pos, std::fstream& fin)
 	{
 		std::array<char, batch_size> arr;
 		auto read_amt = std::min<std::streamsize>(size - batch_ind * batch_size, batch_size);
-		file.seekg(data_start_pos + batch_ind * batch_size, std::ios::beg);
-		file.read(arr.data(), read_amt);
-		check_file();
+		fin.seekg(data_start_pos + batch_ind * batch_size, std::ios::beg);
+		fin.read(arr.data(), read_amt);
+		check_file(fin);
 		return { arr, read_amt };
 	}
+	std::pair<std::array<char, batch_size>, std::size_t> read_def_batched(int batch_ind, std::uint32_t size, std::streamoff data_start_pos) { return read_def_batched(batch_ind, size, data_start_pos, file); }
 	
 	// expects file to be readable
 	// Complexity: O(def_size)

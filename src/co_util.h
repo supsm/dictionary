@@ -112,6 +112,8 @@ while (!t.coro_handle.done()) { co_await t; } \
 CONCAT(detail_t_ret_, __LINE__) = t.coro_handle.promise().data_out; } \
 rha_wrapper(std::move(CONCAT(detail_t_ret_, __LINE__)))
 
+// TODO: CO_IF (using c++17 if init statement)
+
 // use return value of `func` as the condition of a while loop
 // OPEN BRACE IS APPLIED IN MACRO AND NEEDS TO BE CLOSED
 // Example usage:
