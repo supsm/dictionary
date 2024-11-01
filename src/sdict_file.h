@@ -32,8 +32,7 @@
 // (words section)
 //     word word word word ... (num_words in total, null terminated; occupies words_size bytes)
 // (defs section)
-//     def def def def ... (num_words in total; each def contains a unsigned 32-bit (4-byte LE) integer as size)
-// TODO: should we store a definition hash along with the size?
+//     def def def def ... (num_words in total; each def contains a unsigned 32-bit (4-byte LE) integer as size and unsigned 64-bit (8-byte LE) int as hash)
 class dictionary_file
 {
 private:
@@ -83,6 +82,7 @@ private:
 	
 	// map of def size and hash to inds
 	std::unordered_map<std::uint32_t, std::unordered_map<std::uint64_t, std::vector<std::uint32_t>>> existing_defs;
+	bool do_dedup = true; // TODO: apply this
 
 public:
 	// true if a file was created on construction, false if it was read from
@@ -92,29 +92,12 @@ public:
 	// open(string_view) must be called before anything else
 	dictionary_file() {}
 
-	// @param load_defs  whether to load definitions for deduplication (expensive)
+	// @param deduplicate  whether to enable deduplication
+	// @param check_defs  whether to verify definition hashes (expensive)
 	// @throws std::runtime_error  on file i/o error or if parsing receives an unexpected value
-	dictionary_file(std::string_view filename, bool load_defs = true) : filename(filename), file_open_type(open_type::none)
+	dictionary_file(std::string_view filename_, bool deduplicate = true, bool check_defs = true)
 	{
-		if (!std::filesystem::is_regular_file(filename))
-		{
-			if (std::filesystem::exists(filename))
-				{ throw std::runtime_error(std::string(filename) + " exists but is not a regular file"); }
-			create_file();
-			created_file = true;
-		}
-		else
-		{
-			open();
-			if (load_defs)
-			{
-				for (const auto& [word, def_ind] : words)
-				{
-					const auto [size, hash] = hash_existing_def(def_ind);
-					existing_defs[size][hash].push_back(def_ind); // keep old def_ind value if exists
-				}
-			}
-		}
+		open(filename_, deduplicate, check_defs);
 	}
 
 	~dictionary_file()
@@ -127,23 +110,44 @@ public:
 		}
 	}
 	
-	// associate given filename with this object and open as input (reading contents)
+	// associate given filename with this object and open as input (reading contents or creating if not exists)
+	// TODO: update complexity
 	// Complexity: O(reserved_words + total_words_len + N*log(N)), where N is number of words
 	// File Access: Read, magic_bytes.size() + 8 + reserved_words * 8 + total_words_len
 	// @throws std::runtime_error  on file i/o or parsing error
-	void open(std::string_view filename_, bool load_defs = true)
+	void open(std::string_view filename_, bool deduplicate = true, bool check_defs = true)
 	{
 		filename = filename_;
 		file_open_type = open_type::none;
-		open();
-		if (load_defs)
+		do_dedup = deduplicate;
+		
+		if (!std::filesystem::is_regular_file(filename))
 		{
-			existing_defs.clear();
-			for (const auto& [word, def_ind] : words)
+			if (std::filesystem::exists(filename))
+				{ throw std::runtime_error(std::string(filename) + " exists but is not a regular file"); }
+			create_file();
+			created_file = true;
+		}
+		else
+		{
+			open();
+			if (deduplicate || check_defs)
 			{
-				const auto [size, hash] = hash_existing_def(def_ind);
-				existing_defs[size][hash].push_back(def_ind); // keep old def_ind value if exists
+				for (const auto& [word, def_ind] : words)
+				{
+					auto [size, hash] = get_def_size_and_hash(def_ind);
+					assert(size != 0);
+					if (deduplicate)
+						{ existing_defs[size][hash].push_back(def_ind); } // keep old def_ind value if exists
+					if (check_defs)
+					{
+						if (hash != hash_existing_def(def_ind, size))
+							{ throw std::runtime_error("Definition hash does not match. File may be corrupted"); }
+					}
+				}
 			}
+			
+			created_file = false;
 		}
 	}
 
@@ -276,7 +280,7 @@ public:
 		if (first_new_word == -1)
 			{ first_new_word = words.size(); }
 		
-		if (auto def_ind = get_existing_def_ind(def))
+		if (auto def_ind = (do_dedup ? get_existing_def_ind(def) : std::nullopt))
 		{
 			words.emplace_back(std::string(word), def_ind.value());
 		}
@@ -292,12 +296,18 @@ public:
 			if (cur_def_offset < 0)
 				{ throw std::runtime_error("Incorrect file size (too small)"); }
 			words.emplace_back(std::string(word), cur_def_offset);
+			
+			auto hash = fnv1a(def);
 
-			// add def to existing_defs
-			existing_defs[def.size()][fnv1a(def)].push_back(cur_def_offset);
+			if (do_dedup)
+			{
+				// add def to existing_defs
+				existing_defs[def.size()][hash].push_back(cur_def_offset);
+			}
 			
 			// add def to file
 			write_uint32_LE(def.size());
+			write_uint64_LE(hash);
 			file.write(reinterpret_cast<const char*>(def.data()), def.size());
 		}
 		
@@ -326,12 +336,12 @@ public:
 	// Complexity: O(def_size)
 	// File Access: Read, def_size + 4 bytes
 	// @throws std::runtime_error  on file i/o error
-	std::optional<std::vector<char>> find(std::string_view word)
+	std::optional<std::vector<char>> find(std::string_view word, bool check_def = false)
 	{
 		std::uint32_t ind = find_def_ind(word);
 		if (ind == -1)
 			{ return {}; }
-		return read_def_whole(ind);
+		return read_def_whole(ind, check_def);
 	}
 
 private:
@@ -381,10 +391,10 @@ private:
 		std::uint32_t val = 0;
 		char chars[4];
 		fin.read(chars, 4);
-		val += static_cast<unsigned char>(chars[0]);
-		val += static_cast<unsigned char>(chars[1]) << 8;
-		val += static_cast<unsigned char>(chars[2]) << 16;
-		val += static_cast<unsigned char>(chars[3]) << 24;
+		val += static_cast<std::uint32_t>(static_cast<unsigned char>(chars[0]));
+		val += static_cast<std::uint32_t>(static_cast<unsigned char>(chars[1])) << 8;
+		val += static_cast<std::uint32_t>(static_cast<unsigned char>(chars[2])) << 16;
+		val += static_cast<std::uint32_t>(static_cast<unsigned char>(chars[3])) << 24;
 		return val;
 	}
 	std::uint32_t read_uint32_LE() { return read_uint32_LE(file); }
@@ -397,6 +407,36 @@ private:
 		fout.put(static_cast<char>(static_cast<unsigned char>((num >> 24) & 0xFF)));
 	}
 	void write_uint32_LE(std::uint32_t num) { write_uint32_LE(num, file); }
+	// expects file to be readable
+	static std::uint64_t read_uint64_LE(std::fstream& fin)
+	{
+		std::uint64_t val = 0;
+		char chars[8];
+		fin.read(chars, 8);
+		val += static_cast<std::uint64_t>(static_cast<unsigned char>(chars[0]));
+		val += static_cast<std::uint64_t>(static_cast<unsigned char>(chars[1])) << 8;
+		val += static_cast<std::uint64_t>(static_cast<unsigned char>(chars[2])) << 16;
+		val += static_cast<std::uint64_t>(static_cast<unsigned char>(chars[3])) << 24;
+		val += static_cast<std::uint64_t>(static_cast<unsigned char>(chars[4])) << 32;
+		val += static_cast<std::uint64_t>(static_cast<unsigned char>(chars[5])) << 40;
+		val += static_cast<std::uint64_t>(static_cast<unsigned char>(chars[6])) << 48;
+		val += static_cast<std::uint64_t>(static_cast<unsigned char>(chars[7])) << 56;
+		return val;
+	}
+	std::uint64_t read_uint64_LE() { return read_uint64_LE(file); }
+	// expects file to be writable
+	static void write_uint64_LE(std::uint64_t num, std::fstream& fout)
+	{
+		fout.put(static_cast<char>(static_cast<unsigned char>(num & 0xFF)));
+		fout.put(static_cast<char>(static_cast<unsigned char>((num >> 8) & 0xFF)));
+		fout.put(static_cast<char>(static_cast<unsigned char>((num >> 16) & 0xFF)));
+		fout.put(static_cast<char>(static_cast<unsigned char>((num >> 24) & 0xFF)));
+		fout.put(static_cast<char>(static_cast<unsigned char>((num >> 32) & 0xFF)));
+		fout.put(static_cast<char>(static_cast<unsigned char>((num >> 40) & 0xFF)));
+		fout.put(static_cast<char>(static_cast<unsigned char>((num >> 48) & 0xFF)));
+		fout.put(static_cast<char>(static_cast<unsigned char>((num >> 56) & 0xFF)));
+	}
+	void write_uint64_LE(std::uint64_t num) { write_uint64_LE(num, file); }
 
 	// expects file to be writable
 	static void write_nulls(std::size_t count, std::fstream& fout)
@@ -437,12 +477,45 @@ private:
 		return hash;
 	}
 
-	// @return pair of size and hash. returns { 0, 0 } on error
-	std::pair<std::uint32_t, std::uint64_t> hash_existing_def(std::uint32_t def_ind, std::uint32_t expected_size, std::streamoff defs_section_offset_)
+	// @param expected_size  expected size, or 0 to skip size checking
+	// @return pair of size and hash or { 0, 0 } if size does not match expected
+	std::pair<std::uint32_t, std::uint64_t> get_def_size_and_hash(std::uint32_t def_ind, std::uint32_t expected_size, std::streamoff defs_section_offset_)
+	{
+		auto def_off = defs_section_offset_ + def_ind;
+		file.seekg(def_off, std::ios::beg);
+		std::uint32_t size = read_uint32_LE();
+		check_file();
+		if (size == 0)
+			{ throw std::runtime_error("Read 0 definition size. File may be corrupted"); }
+		if (expected_size != 0 && size != expected_size)
+			{ return {0, 0}; }
+		std::uint64_t hash = read_uint64_LE();
+		check_file();
+		return { size, hash };
+	}
+	auto get_def_size_and_hash(std::uint32_t def_ind, std::uint32_t expected_size = 0) { return get_def_size_and_hash(def_ind, expected_size, defs_section_offset()); }
+	
+	// retrieve hash of definition from file (fast)
+	// @param expected_size  expected size, or 0 to skip size checking
+	// @return hash, or nullopt if size does not match expected_size
+	std::optional<std::uint64_t> get_def_hash(std::uint32_t def_ind, std::uint32_t expected_size, std::streamoff defs_section_offset_)
+	{
+		auto [size, hash] = get_def_size_and_hash(def_ind, expected_size, defs_section_offset_);
+		if (size == 0)
+			{ return {}; }
+		return hash;
+	}
+	auto get_def_hash(std::uint32_t def_ind, std::uint32_t expected_size = 0) { return get_def_hash(def_ind, expected_size, defs_section_offset()); }
+	
+	// hash definition found in file (slow)
+	// should only be used to verify hashes on open()
+	// @param expected_size  expected size, or 0 to skip size checking
+	// @return hash, or nullopt if size does not match expected_size
+	std::optional<std::uint64_t> hash_existing_def(std::uint32_t def_ind, std::uint32_t expected_size = 0)
 	{
 		std::uint64_t hash = fnv_init;
 
-		auto def_off = defs_section_offset_ + def_ind;
+		auto def_off = defs_section_offset() + def_ind;
 		file.seekg(def_off, std::ios::beg);
 		std::uint32_t size = read_uint32_LE();
 		check_file();
@@ -450,17 +523,18 @@ private:
 			{ throw std::runtime_error("Read 0 definition size. File may be corrupted"); }
 
 		if (expected_size != 0 && size != expected_size)
-			{ return { 0, 0 }; }
+			{ return {}; }
+		
+		file.ignore(8); // skip reading existing hash
 
 		for (int i = 0; i < (size - 1) / batch_size + 1; i++) // (size / batch_size) rounded up
 		{
-			const auto [data, read_amt] = read_def_batched(i, size, def_off + 4);
+			const auto [data, read_amt] = read_def_batched(i, size, def_off + 12);
 			check_file();
 			hash = fnv1a(std::as_bytes(std::span(data).subspan(0, read_amt)), hash);
 		}
-		return { size, hash };
+		return hash;
 	}
-	std::pair<std::uint32_t, std::uint64_t> hash_existing_def(std::uint32_t def_ind, std::uint32_t expected_size = 0) { return hash_existing_def(def_ind, expected_size, defs_section_offset()); }
 	
 	std::optional<std::uint32_t> get_existing_def_ind(std::span<const std::byte> def)
 	{
@@ -475,7 +549,7 @@ private:
 			{
 				for (const auto def_ind : it2->second)
 				{
-					if (hash_existing_def(def_ind, size) == std::make_pair(size, hash))
+					if (get_def_hash(def_ind, size) == hash)
 						{ return def_ind; }
 				}
 			}
@@ -659,7 +733,10 @@ private:
 
 		// defs section
 		{
-			existing_defs.clear();
+			if (do_dedup)
+			{
+				existing_defs.clear();
+			}
 
 			std::streampos defs_sect_start = file2.tellp();
 			assert(defs_sect_start == defs_section_offset());
@@ -674,65 +751,99 @@ private:
 				if (size == 0)
 					{ throw std::runtime_error("Read 0 definition size. File may be corrupted"); }
 				
-				const auto it = existing_defs.find(size);
-				if (it != existing_defs.end())
+				std::optional<std::uint64_t> old_hash;
+				if (do_dedup)
 				{
-					const auto [size2, hash] = hash_existing_def(def_ind, size, old_defs_sect_off);
-					if (size2 == size)
+					const auto it = existing_defs.find(size);
+					if (it != existing_defs.end())
 					{
-						const auto it2 = it->second.find(hash);
-						if (it2 != it->second.end())
+						const auto res = get_def_size_and_hash(def_ind, size, old_defs_sect_off);
+						const auto size2 = res.first;
+						old_hash = res.second;
+						if (size2 == size)
 						{
-							bool found_match = false;
-							for (const std::streamoff found_def_ind : it2->second)
+							const auto it2 = it->second.find(old_hash.value());
+							if (it2 != it->second.end())
 							{
-								file.seekg(cur_def_off, std::ios::beg);
-								auto read_size = read_uint32_LE();
-								check_file();
-								if (read_size != size)
-									{ continue; }
-								file2.seekg(defs_sect_start + found_def_ind, std::ios::beg);
-								read_size = read_uint32_LE(file2);
-								check_file(file2);
-								if (read_size != size)
-									{ continue; }
-
-								static constexpr std::size_t cmp_batch_size = 1024;
-								bool mismatch = false;
-								for (int i = 0; i < (size - 1) / batch_size + 1; i++) // (size / cmp_batch_size) rounded up
+								bool found_match = false;
+								for (const std::streamoff found_def_ind : it2->second)
 								{
-									const auto [data, read_amt] = read_def_batched(i, size, cur_def_off + 4);
+									file.seekg(cur_def_off, std::ios::beg);
+									auto read_size = read_uint32_LE();
 									check_file();
-									const auto [data2, read_amt2] = read_def_batched(i, size, defs_sect_start + (found_def_ind + 4), file2);
+									if (read_size != size)
+										{ continue; }
+									file2.seekg(defs_sect_start + found_def_ind, std::ios::beg);
+									read_size = read_uint32_LE(file2);
 									check_file(file2);
-									if (read_amt != read_amt2 || data != data2)
-										{ mismatch = true; break; }
+									if (read_size != size)
+										{ continue; }
+									// we've already read the hash from `file` through get_def_hash
+									const auto hash2 = read_uint64_LE(file2);
+									if (hash2 != old_hash.value())
+										{ continue; }
+
+									static constexpr std::size_t cmp_batch_size = 1024;
+									bool mismatch = false;
+									for (int i = 0; i < (size - 1) / batch_size + 1; i++) // (size / cmp_batch_size) rounded up
+									{
+										const auto [data, read_amt] = read_def_batched(i, size, cur_def_off + 12);
+										check_file();
+										const auto [data2, read_amt2] = read_def_batched(i, size, defs_sect_start + (found_def_ind + 12), file2);
+										check_file(file2);
+										if (read_amt != read_amt2 || data != data2)
+											{ mismatch = true; break; }
+									}
+									if (!mismatch)
+										{ def_ind = found_def_ind; found_match = true; break; }
 								}
-								if (!mismatch)
-									{ def_ind = found_def_ind; found_match = true; break; }
+								if (found_match)
+									{ continue; }
 							}
-							if (found_match)
-								{ continue; }
 						}
 					}
 				}
 
+				std::uint64_t hash = [old_hash, cur_def_off, this]()
+				{
+					if (!do_dedup)
+						{ return fnv_init; } // will be written to the file but we don't care (will be overwritten)
+					if (old_hash)
+						{ return old_hash.value(); }
+					file.seekg(cur_def_off + 4, std::ios::beg);
+					std::uint64_t hash = read_uint64_LE();
+					check_file();
+					return hash;
+				}();
+				
 				file2.seekp(0, std::ios::end);
+				assert(file2.tellp() >= defs_sect_start);
 				def_ind = file2.tellp() - defs_sect_start;
 
 				write_uint32_LE(size, file2);
+				write_uint64_LE(hash, file2);
 				
-				std::uint64_t hash = fnv_init;
 				for (int i = 0; i < (size - 1) / batch_size + 1; i++) // (size / batch_size) rounded up
 				{
-					const auto [data, read_amt] = read_def_batched(i, size, cur_def_off + 4);
+					const auto [data, read_amt] = read_def_batched(i, size, cur_def_off + 12);
 					check_file();
 					file2.write(data.data(), read_amt);
-					hash = fnv1a(std::as_bytes(std::span(data).subspan(0, read_amt)), hash);
+					if (!do_dedup)
+					{
+						hash = fnv1a(std::as_bytes(std::span(data).subspan(0, read_amt)), hash);
+					}
 				}
 				
-				assert(!std::ranges::contains(existing_defs[size][hash], def_ind));
-				existing_defs[size][hash].push_back(def_ind);
+				if (!do_dedup)
+				{
+					file2.seekp(defs_sect_start + static_cast<std::streamoff>(def_ind), std::ios::beg);
+					write_uint64_LE(hash, file2);
+				}
+				else
+				{
+					assert(!std::ranges::contains(existing_defs[size][hash], def_ind));
+					existing_defs[size][hash].push_back(def_ind);
+				}
 			}
 		}
 
@@ -804,14 +915,22 @@ private:
 	// Complexity: O(def_size)
 	// File Access: Read, 4 + def_size bytes
 	// @param def_ind  start position of definition (including data size)
-	std::vector<char> read_def_whole(std::uint32_t def_ind)
+	std::vector<char> read_def_whole(std::uint32_t def_ind, bool check_def = false)
 	{
 		file.seekg(defs_section_offset() + def_ind, std::ios::beg);
-		auto size = read_uint32_LE();
+		const auto size = read_uint32_LE();
 		check_file();
+		const auto hash = read_uint64_LE();
+		check_file();
+		
 		std::vector<char> v(size);
 		file.read(v.data(), size);
 		check_file();
+		
+		if (check_def && hash != fnv1a(std::as_bytes(std::span(v))))
+		{
+			throw std::runtime_error("Definition hash does not match. File may be corrupted");
+		}
 		return v;
 	}
 };

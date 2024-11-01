@@ -103,11 +103,11 @@ TEST_CASE("read fixed", "[sdict]")
 
 	REQUIRE(file.contains("testword1"));
 	constexpr std::string_view def1 = "This is the definition for the first test word.";
-	REQUIRE(std::ranges::equal(file.find("testword1").value(), def1));
+	REQUIRE(std::ranges::equal(file.find("testword1", true).value(), def1));
 
 	REQUIRE(file.contains("testword2"));
 	constexpr std::string_view def2 = "This is the definition for the second test word.";
-	REQUIRE(std::ranges::equal(file.find("testword2").value(), def2));
+	REQUIRE(std::ranges::equal(file.find("testword2", true).value(), def2));
 }
 
 TEST_CASE("read+write fixed", "[sdict]")
@@ -116,17 +116,18 @@ TEST_CASE("read+write fixed", "[sdict]")
 	if (std::filesystem::exists(filename))
 		{ std::filesystem::remove(filename); }
 
+	// word25 definition should collide with FNV-1a hash of "definition1"
 	static constexpr std::array<std::pair<std::string_view, std::string_view>, 33> words_defs =
 	{ {
-		{ "word1", "definition1" }, { "word2", "definition2" }, { "word3", "definition3" }, { "word4", "definition4" },
-		{ "word5", "definition1" }, { "word6", "definition1" }, { "word7", "definition2" }, { "word8", "definition2" },
-		{ "word9", "definition2" }, { "word10", "definition3" }, { "word11", "definition3" }, { "word12", "definition3" },
+		{ "word1", "definition1" },  { "word2", "definition2" },  { "word3", "definition3" },  { "word4", "definition4" },
+		{ "word5", "def1" },         { "word6", "definition1" },  { "word7", "definition2" },  { "word8", "def2" },
+		{ "word9", "definition2" },  { "word10", "definition3" }, { "word11", "definition3" }, { "word12", "def3" },
 		{ "word13", "definition4" }, { "word14", "definition4" }, { "word15", "definition1" }, { "word16", "definition1" },
-		{ "word17", "definition1" }, { "word18", "definition1" }, { "word19", "definition3" }, { "word20", "definition3" },
+		{ "word17", "definition1" }, { "word18", "def1" },        { "word19", "definition3" }, { "word20", "definition3" },
 		{ "word21", "definition2" }, { "word22", "definition2" }, { "word23", "definition4" }, { "word24", "definition2" },
-		{ "word25", "definition1" }, { "word26", "definition4" }, { "word27", "definition1" }, { "word28", "definition3" },
-		{ "word29", "definition2" }, { "word30", "definition5" }, { "word31", "definition1" }, { "word32", "definition6" },
-		{ "word33", "definition2" }
+		{ "word25", "ygj6&2.8l$y" }, { "word26", "definition4" }, { "word27", "definition1" }, { "word28", "definition3" },
+		{ "word29", "definition2" }, { "word30", "definition5" }, { "word31", "def1" },        { "word32", "definition6" },
+		{ "word33", "d" }
 	} };
 	{
 		dictionary_file file(filename);
@@ -159,7 +160,7 @@ TEST_CASE("read+write fixed", "[sdict]")
 		for (const auto& [word, def] : words_defs)
 		{
 			REQUIRE(file.contains(word));
-			REQUIRE(cmp_as_bytes(def, file.find(word).value()));
+			REQUIRE(cmp_as_bytes(def, file.find(word, true).value()));
 		}
 	}
 
@@ -238,7 +239,7 @@ TEST_CASE("read+write dynamic", "[sdict]")
 		for (const auto& [word, def] : words)
 		{
 			REQUIRE(file.contains(word));
-			REQUIRE(cmp_as_bytes(def, file.find(word).value()));
+			REQUIRE(cmp_as_bytes(def, file.find(word, true).value()));
 		}
 	}
 
@@ -263,7 +264,7 @@ TEST_CASE("create and add", "[sdict]")
 			file.add_word(word, def);
 			REQUIRE(file.num_words() == 1);
 			REQUIRE(file.contains(word));
-			REQUIRE(cmp_as_bytes(def, file.find(word).value()));
+			REQUIRE(cmp_as_bytes(def, file.find(word, true).value()));
 		}
 		SECTION("large word")
 		{
@@ -272,7 +273,7 @@ TEST_CASE("create and add", "[sdict]")
 			file.add_word(word, def);
 			REQUIRE(file.num_words() == 1);
 			REQUIRE(file.contains(word));
-			REQUIRE(cmp_as_bytes(def, file.find(word).value()));
+			REQUIRE(cmp_as_bytes(def, file.find(word, true).value()));
 		}
 		SECTION("multiple")
 		{
@@ -294,7 +295,7 @@ TEST_CASE("create and add", "[sdict]")
 				REQUIRE(file.num_words() == words.size() + (res ? 1 : 0));
 				REQUIRE(file.contains(word));
 				if (res)
-					{ REQUIRE(cmp_as_bytes(def, file.find(word).value())); }
+					{ REQUIRE(cmp_as_bytes(def, file.find(word, true).value())); }
 				words.emplace(std::move(word), std::move(def));
 			}
 			WARN("Avg add_word (with flush, 1024) time: " << total_duration / num_added);
