@@ -9,7 +9,7 @@
 
 int main()
 {
-	std::ifstream fin("words.txt");
+	std::ifstream fin("words.txt"); // NB: words.txt should have no duplicates!
 	if (std::filesystem::exists("data.sdict")) { std::filesystem::remove("data.sdict"); }
 	dictionary_file dict_file("data.sdict");
 	httplib::SSLClient http_client("www.dictionaryapi.com");
@@ -21,6 +21,7 @@ int main()
 		fin >> api_key;
 	}
 	
+	std::size_t num = 0;
 	std::string word;
 	while (std::getline(fin, word))
 	{
@@ -35,7 +36,7 @@ int main()
 					c == '-' || c == '.' || c == '_' || c == '~')
 					{ s += c; }
 				else
-					{ s += std::format("{:X}", c); }
+					{ s += std::format("%{:X}", c); }
 			}
 			return s;
 		};
@@ -98,6 +99,10 @@ int main()
 		}
 		
 		dict_file.add_word<false, true>(word, std::as_bytes(std::span(cbor_bytes)));
+		
+		num++;
+		if (num % 10 == 0)
+			{ std::cout << num << std::endl; }
 	}
 	dict_file.flush();
 }

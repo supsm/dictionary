@@ -82,7 +82,7 @@ private:
 	
 	// map of def size and hash to inds
 	std::unordered_map<std::uint32_t, std::unordered_map<std::uint64_t, std::vector<std::uint32_t>>> existing_defs;
-	bool do_dedup = true; // TODO: apply this
+	bool do_dedup = true;
 
 public:
 	// true if a file was created on construction, false if it was read from
@@ -92,12 +92,13 @@ public:
 	// open(string_view) must be called before anything else
 	dictionary_file() {}
 
+	// @param create_if_not_exists  whether to create a new file if an existing one is not found
 	// @param deduplicate  whether to enable deduplication
 	// @param check_defs  whether to verify definition hashes (expensive)
 	// @throws std::runtime_error  on file i/o error or if parsing receives an unexpected value
-	dictionary_file(std::string_view filename_, bool deduplicate = true, bool check_defs = true)
+	dictionary_file(std::string_view filename_, bool create_if_not_exists = true, bool deduplicate = true, bool check_defs = true)
 	{
-		open(filename_, deduplicate, check_defs);
+		open(filename_, create_if_not_exists, deduplicate, check_defs);
 	}
 
 	~dictionary_file()
@@ -115,7 +116,7 @@ public:
 	// Complexity: O(reserved_words + total_words_len + N*log(N)), where N is number of words
 	// File Access: Read, magic_bytes.size() + 8 + reserved_words * 8 + total_words_len
 	// @throws std::runtime_error  on file i/o or parsing error
-	void open(std::string_view filename_, bool deduplicate = true, bool check_defs = true)
+	void open(std::string_view filename_, bool create_if_not_exists = true, bool deduplicate = true, bool check_defs = true)
 	{
 		filename = filename_;
 		file_open_type = open_type::none;
@@ -125,6 +126,9 @@ public:
 		{
 			if (std::filesystem::exists(filename))
 				{ throw std::runtime_error(std::string(filename) + " exists but is not a regular file"); }
+			if (!create_if_not_exists)
+				{ throw std::runtime_error(std::string(filename) + " does not exist, not creating"); }
+			
 			create_file();
 			created_file = true;
 		}
@@ -253,6 +257,7 @@ public:
 		return true;
 	}
 	
+	// TODO: something to add a stream of data (with part of definition added at a time)
 	// TODO: override def instead of ignoring if word exists
 	// If flush_words:
 	//   Complexity equals that of flush(), File Access equals that of flush() plus def_len
@@ -604,6 +609,9 @@ private:
 	{
 		if (!file)
 			{ throw std::runtime_error("Error reading from file"); }
+		
+		std::uintmax_t file_size = std::filesystem::file_size(filename);
+		
 		file.seekg(0, std::ios::beg);
 		{
 			std::array<char, magic_bytes.size()> arr;
@@ -612,7 +620,6 @@ private:
 			if (!std::ranges::equal(magic_bytes, arr))
 				{ throw std::runtime_error("Incorrect magic bytes. File may be corrupted"); }
 		}
-		// TODO: validate these sizes with the size of the file
 		reserved_words = read_uint32_LE();
 		check_file();
 		if (reserved_words == 0)
@@ -625,6 +632,9 @@ private:
 		check_file();
 		if (num_words > reserved_words)
 			{ throw std::runtime_error("Number of words is greater than total reserved words. File may be corrupted"); }
+		
+		if (static_cast<std::uintmax_t>(reserved_words) * 8 + static_cast<std::uintmax_t>(num_words))
+			{ throw std::runtime_error("Reported indices + words section sizes is greater than file size. File may be corrupted"); }
 		
 		static const auto sort_and_find_dup = [](auto& v) -> bool
 		{

@@ -247,7 +247,7 @@ void search_word(std::string_view word)
 							c == '-' || c == '.' || c == '_' || c == '~')
 							{ s += c; }
 						else
-							{ s += std::format("{:X}", c); }
+							{ s += std::format("%{:X}", c); }
 					}
 					return s;
 				};
@@ -378,7 +378,15 @@ int main()
 
 	Fl::get_system_colors();
 
-	dict_file.open("data.sdict");
+	try
+	{
+		dict_file.open("data.sdict", false);
+	}
+	catch (const std::exception& e)
+	{
+		fl_alert(e.what());
+		return -1;
+	}
 	{
 		std::ifstream fin("api_key.txt");
 		if (!fin)
