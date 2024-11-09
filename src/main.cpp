@@ -30,6 +30,8 @@ std::string api_key;
 httplib::SSLClient http_client("www.dictionaryapi.com");
 std::string last_word = "";
 dictionary_file dict_file;
+bool online_mode = true, offline_mode = true; // TODO: indicators for whether each of these are available; maybe indicator for whether search is online or not
+// TODO: offline search completion?
 
 // TODO: save/restore scroll location and selections?
 struct cached_def
@@ -196,10 +198,13 @@ void search_word(std::string_view word)
 			{ word_only = word.substr(0, word_colon); }
 
 		std::optional<std::vector<char>> dict_res;
-		try
-			{ dict_res = dict_file.find(word); }
-		catch (const std::exception& e)
-			{ fl_alert("%s", e.what()); return; }
+		if (offline_mode)
+		{
+			try
+				{ dict_res = dict_file.find(word); }
+			catch (const std::exception& e)
+				{ fl_alert("%s", e.what()); return; }
+		}
 
 		try
 		{
@@ -231,7 +236,7 @@ void search_word(std::string_view word)
 				catch (const std::exception& e)
 					{ throw std::runtime_error(std::format("CBOR parse error: {}", e.what())); }
 			}
-			else
+			else if (online_mode)
 			{
 				json_coro_cursor cursor;
 				task<void> parse_task = begin_parse(cursor, data);
@@ -261,6 +266,10 @@ void search_word(std::string_view word)
 				{
 					throw std::runtime_error(std::format("Unexpected HTTP Status {}", res->status));
 				}
+			}
+			else
+			{
+				throw std::runtime_error(std::format("Unable to find \"{}\" in offline dictionary", word));
 			}
 		}
 		catch (const std::runtime_error& e)
@@ -378,23 +387,36 @@ int main()
 
 	Fl::get_system_colors();
 
+	std::string sdict_error_msg;
 	try
 	{
 		dict_file.open("data.sdict", false);
 	}
 	catch (const std::exception& e)
 	{
-		fl_alert(e.what());
-		return -1;
+		sdict_error_msg = e.what();
+		offline_mode = false;
 	}
+
 	{
 		std::ifstream fin("api_key.txt");
 		if (!fin)
 		{
-			fl_alert("API key not found. Place key in api_key.txt.");
-			return -1;
+			if (!offline_mode) // online and offline both unavailable
+			{
+				fl_alert(std::format("Unable to open offline dictionary data.sdict ({}) and API key not found (place key in api_key.txt). Quitting", sdict_error_msg).c_str());
+				return -1;
+			}
+			fl_alert("API key not found (place key in api_key.txt). Using offline-only mode");
+			online_mode = false;
 		}
-		fin >> api_key;
+		else
+			{ fin >> api_key; }
+	}
+
+	if (!offline_mode) // online-only mode
+	{
+		fl_alert(std::format("Unable to open offline dictionary (data.sdict): {}. Using online-only mode", sdict_error_msg).c_str());
 	}
 	
 	ui.window.show();

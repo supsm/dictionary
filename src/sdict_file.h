@@ -633,7 +633,7 @@ private:
 		if (num_words > reserved_words)
 			{ throw std::runtime_error("Number of words is greater than total reserved words. File may be corrupted"); }
 		
-		if (static_cast<std::uintmax_t>(reserved_words) * 8 + static_cast<std::uintmax_t>(num_words))
+		if (static_cast<std::uintmax_t>(reserved_words) * 8 + static_cast<std::uintmax_t>(num_words) > file_size)
 			{ throw std::runtime_error("Reported indices + words section sizes is greater than file size. File may be corrupted"); }
 		
 		static const auto sort_and_find_dup = [](auto& v) -> bool
