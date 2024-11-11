@@ -31,7 +31,7 @@ httplib::SSLClient http_client("www.dictionaryapi.com");
 std::string last_word = "";
 dictionary_file dict_file;
 bool online_mode = true, offline_mode = true; // TODO: indicators for whether each of these are available; maybe indicator for whether search is online or not
-// TODO: offline search completion?
+// TODO: offline search completion (maybe Fl_Input_Choice)?
 
 // TODO: save/restore scroll location and selections?
 struct cached_def

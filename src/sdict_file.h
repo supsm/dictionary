@@ -43,9 +43,8 @@ private:
 	constexpr static std::size_t batch_size = 4096;
 
 	// convert string literal to array, removing the null delimiter
-	template<std::size_t N>
-	constexpr static auto strlit_to_array(const char (&a)[N])
-		{ std::array<char, N - 1> arr; std::copy_n(a, N - 1, arr.begin()); return arr; }
+	constexpr static auto strlit_to_array = []<std::size_t N>(const char(&a)[N])
+		{ std::array<char, N - 1> arr; std::copy_n(a, N - 1, arr.begin()); return arr; };
 
 	constexpr static std::array magic_bytes = strlit_to_array("SDICT\x01\x00");
 
@@ -498,7 +497,7 @@ private:
 		check_file();
 		return { size, hash };
 	}
-	auto get_def_size_and_hash(std::uint32_t def_ind, std::uint32_t expected_size = 0) { return get_def_size_and_hash(def_ind, expected_size, defs_section_offset()); }
+	std::pair<std::uint32_t, std::uint64_t> get_def_size_and_hash(std::uint32_t def_ind, std::uint32_t expected_size = 0) { return get_def_size_and_hash(def_ind, expected_size, defs_section_offset()); }
 	
 	// retrieve hash of definition from file (fast)
 	// @param expected_size  expected size, or 0 to skip size checking
@@ -510,7 +509,7 @@ private:
 			{ return {}; }
 		return hash;
 	}
-	auto get_def_hash(std::uint32_t def_ind, std::uint32_t expected_size = 0) { return get_def_hash(def_ind, expected_size, defs_section_offset()); }
+	std::optional<std::uint64_t> get_def_hash(std::uint32_t def_ind, std::uint32_t expected_size = 0) { return get_def_hash(def_ind, expected_size, defs_section_offset()); }
 	
 	// hash definition found in file (slow)
 	// should only be used to verify hashes on open()
