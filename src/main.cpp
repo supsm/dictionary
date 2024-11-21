@@ -189,19 +189,22 @@ void restore_from_cache(std::size_t ind)
 
 void search_word(std::string_view word)
 {
-	const auto word_colon = word.rfind(':');
+	std::string word_lower(word.size(), 0);
+	std::ranges::transform(word, word_lower.begin(), [](unsigned char c) { return std::tolower(c); });
+
+	const auto word_colon = word_lower.rfind(':');
 	std::vector<word_info> data;
 
 	{
-		std::string_view word_only = word;
+		std::string_view word_only = word_lower;
 		if (word_colon != std::string_view::npos)
-			{ word_only = word.substr(0, word_colon); }
+			{ word_only = word_lower.substr(0, word_colon); }
 
 		std::optional<std::vector<char>> dict_res;
 		if (offline_mode)
 		{
 			try
-				{ dict_res = dict_file.find(word); }
+				{ dict_res = dict_file.find(word_lower); }
 			catch (const std::exception& e)
 				{ fl_alert("%s", e.what()); return; }
 		}
@@ -269,7 +272,7 @@ void search_word(std::string_view word)
 			}
 			else
 			{
-				throw std::runtime_error(std::format("Unable to find \"{}\" in offline dictionary", word));
+				throw std::runtime_error(std::format("Unable to find \"{}\" in offline dictionary", word_lower));
 			}
 		}
 		catch (const std::runtime_error& e)
@@ -287,7 +290,7 @@ void search_word(std::string_view word)
 		cur_cached_ind = cached_defs.size();
 		update_nav_buttons();
 	}
-	last_word = word;
+	last_word = word_lower;
 
 	// we keep a separate buffer instead of using ui.text_buf and ui.style_buf
 	// to prevent calling modify callbacks excessively. This results in a
@@ -309,7 +312,7 @@ void search_word(std::string_view word)
 		add(w.id, get_style(style::title));
 		add("\n");
 
-		if (word_colon != std::string_view::npos && word == w.id)
+		if (word_colon != std::string_view::npos && word_lower == w.id)
 			{ target_word = { start_len, text_buf.size() }; }
 
 		for (const auto& sense : w.defs)

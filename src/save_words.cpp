@@ -88,6 +88,8 @@ void file_read_worker()
 	std::string word;
 	while (std::getline(fin, word))
 	{
+		std::ranges::transform(word, word.begin(), [](unsigned char c) { return std::tolower(c); });
+
 		std::size_t next = (word_buf_end + 1) % word_buf_size;
 
 		// wait if buf_start == buf_end + 1 (buffer is full)
